@@ -1,0 +1,11 @@
+diff --git a/mcelog.cron b/mcelog.cron
+index 4335caa..317b699 100755
+--- a/mcelog.cron
++++ b/mcelog.cron
+@@ -1,2 +1,5 @@
+ #!/bin/bash
+-/usr/sbin/mcelog --ignorenodev --filter >> /var/log/mcelog
++
++# Disabled by default on Fedora since this is run as daemon
++# using the mcelog.service systemd configuration entries.
++#/usr/sbin/mcelog --ignorenodev --filter >> /var/log/mcelog
