@@ -1,31 +1,37 @@
-%define	last_git_commit d2e13bf0
+%define	last_tar_git_commit d2e13bf0
+%define	last_git_commit 2577aeb
 
 Summary:	Tool to translate x86-64 CPU Machine Check Exception data
 Name:		mcelog
 Version:	1.0
-Release:	0.8.%{last_git_commit}%{?dist}
+Release:	0.12.%{last_git_commit}%{?dist}
 Epoch:		2
 Group:		System Environment/Base
 License:	GPLv2
-Source0:	mcelog-%{last_git_commit}.tar.bz2
+Source0:	mcelog-%{last_tar_git_commit}.tar.bz2
+# note that this source OVERRIDES the one on the tarball above!
 Source1:	mcelog.conf
 Source2:	mcelog.service
 Source10:	mcelog.setup
 Patch0:		mcelog-fix-trigger-path-and-cacheing.patch
+# BZ 1039183: Add Haswell and correct Ivy Bridge
+Patch1:		mcelog-update-2577aeb.patch
 URL:		https://github.com/andikleen/mcelog.git
 Buildroot:	%{_tmppath}/%{name}-%{version}-root
 ExclusiveArch:	i686 x86_64
 Requires(post): systemd-units
 Requires(preun): systemd-units
 Requires(postun): systemd-units
+BuildRequires: systemd
 
 %description
 mcelog is a utility that collects and decodes Machine Check Exception data
 on x86-32 and x86-64 systems. It can be run either as a daemon, or by cron.
 
 %prep
-%setup -q -n %{name}-%{last_git_commit}
+%setup -q -n %{name}-%{last_tar_git_commit}
 %patch0 -p1 -b .fix-triggers-and-cacheing
+%patch1 -p1 -b .mcelog-update-2577aeb
 
 %build
 mkdir -p $RPM_BUILD_ROOT/%{_sysconfdir}
@@ -86,6 +92,19 @@ fi
 %attr(0644,root,root) %{_mandir}/*/*
 
 %changelog
+* Wed Jan 22 2014 Prarit Bhargava <prarit@redhat.com> - 2:1.0-0.12.2577aeb
+- Add Haswell client cpuids, identify Ivy Bridge properly, and fix issues
+  on Ivy Bridge
+
+* Fri Dec 27 2013 Daniel Mach <dmach@redhat.com> - 2:1.0-0.11.d2e13bf0
+- Mass rebuild 2013-12-27
+
+* Tue Dec  3 2013 Prarit Bhargava <prarit@redhat.com> 2:1.0-0.10.d2e13bf0
+- Fix prebuilt binaries issue in tarball [1037730]
+
+* Thu Nov 21 2013 Prarit Bhargava <prarit@redhat.com> 2:1.0-0.9.d2e13bf0
+- disable extended logging suppport [1028645]
+
 * Wed May 15 2013 Prarit Bhargava <prarit@redhat.com> 2:1.0-0.8.d2e13bf0
 - update to commit d2e13bf0 [963287]
 
