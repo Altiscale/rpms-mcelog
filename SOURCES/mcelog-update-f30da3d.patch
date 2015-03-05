@@ -1,0 +1,212 @@
+diff --git a/dmi.c b/dmi.c
+index 373837e..290a053 100644
+--- a/dmi.c
++++ b/dmi.c
+@@ -174,8 +174,10 @@ check_symbol:
+ 	if (fclose(efi_systab) != 0)
+ 		perror(filename);
+ 
+-	if (!ret)
+-		Eprintf("%s: SMBIOS entry point missing", filename);
++	if (!ret || !*address){
++		Lprintf("No valid SMBIOS entry point: Continue without DMI decoding");
++		return 0;
++	}
+ 
+ 	if (verbose)
+ 		printf("%s: SMBIOS entry point at 0x%08lx\n", filename,
+@@ -224,6 +226,8 @@ int opendmi(void)
+ 		}
+ 		a = (struct anchor*)((char*)abase + (entry_point_addr - addr_start));
+ 		goto fill_entries;
++	} else {
++		return -1;
+ 	}
+ 
+ legacy:
+diff --git a/input/GENCACHE b/input/GENCACHE
+index 71f1d1a..bcf689d 100755
+--- a/input/GENCACHE
++++ b/input/GENCACHE
+@@ -1,4 +1,4 @@
+-#!/bin/sh
++#!/bin/bash
+ # GENCACHE cpu level type track
+ # generate a memory error. All fields are optional.
+ # see SDM 3a chapter 15 for details
+diff --git a/input/GENMEM b/input/GENMEM
+index c0a4c53..caa61b9 100755
+--- a/input/GENMEM
++++ b/input/GENMEM
+@@ -1,4 +1,4 @@
+-#!/bin/sh
++#!/bin/bash
+ # GENMEM socketid channel dimm corr-err-cnt uc-flag
+ # generate a memory error. All fields are optional.
+ # suitable to be fed into mce-inject or mcelog --ascii
+diff --git a/input/GENPAGE b/input/GENPAGE
+index c63d607..14c20ba 100755
+--- a/input/GENPAGE
++++ b/input/GENPAGE
+@@ -1,4 +1,4 @@
+-#!/bin/sh
++#!/bin/bash
+ # GENMPAGE pfn socketid channel dimm corr-err-cnt
+ # generate a memory error on a page. All fields are optional.
+ # dimm/channel can be out of sync with the address
+diff --git a/intel.c b/intel.c
+index ba353c2..0f5abac 100644
+--- a/intel.c
++++ b/intel.c
+@@ -67,7 +67,8 @@ enum cputype select_intel_cputype(int family, int model)
+ 			return CPU_IVY_BRIDGE;
+ 		else if (model == 0x3e)
+ 			return CPU_IVY_BRIDGE_EPEX;
+-		else if (model == 0x3c || model == 0x45 || model == 0x46)
++		else if (model == 0x3c || model == 0x3f || model == 0x45 ||
++			 model == 0x46)
+ 			return CPU_HASWELL;
+ 		if (model > 0x1a) {
+ 			Eprintf("Family 6 Model %x CPU: only decoding architectural errors\n",
+diff --git a/mcelog.8 b/mcelog.8
+index fa923e7..f8a77c4 100644
+--- a/mcelog.8
++++ b/mcelog.8
+@@ -181,7 +181,13 @@ With the
+ .B \-\-daemon
+ option mcelog will run in the background. This gives the fastest reaction
+ time and is the recommended operating mode.
+-This option implies 
++If an output option isn't selected (
++.I \-\-logfile
++or
++.I \-\-syslog
++or
++.I \-\-syslog-error
++), this option implies
+ .I \-\-logfile=/var/log/mcelog. 
+ Important messages will be logged as one-liner summaries to syslog
+ unless 
+diff --git a/mcelog.c b/mcelog.c
+index 7ceb43d..d90589f 100644
+--- a/mcelog.c
++++ b/mcelog.c
+@@ -508,11 +508,12 @@ int is_cpu_supported(void)
+ 		} 
+ 		if (seen == ALL) {
+ 			if (!strcmp(vendor,"AuthenticAMD")) {
+-				if (family == 15)
++				if (family == 15) {
+ 					cputype = CPU_K8;
+-				if (family >= 15)
+-					SYSERRprintf("AMD Processor family %d: Please load edac_mce_amd module.\n", family);
+-				return 0;
++				} else if (family >= 16) {
++					SYSERRprintf("AMD Processor family %d: Please use the edac_mce_amd module instead.\n", family);
++					return 0;
++				}
+ 			} else if (!strcmp(vendor,"GenuineIntel"))
+ 				cputype = select_intel_cputype(family, model);
+ 			/* Add checks for other CPUs here */	
+@@ -1069,11 +1070,8 @@ static int modifier(int opt)
+ 		break;
+ 	case O_DAEMON:
+ 		daemon_mode = 1;
+-		if (!logfile && !foreground)
+-			logfile = logfile_default;
+ 		if (!(syslog_opt & SYSLOG_FORCE))
+ 			syslog_opt = SYSLOG_REMARK|SYSLOG_ERROR;
+-
+ 		break;
+ 	case O_FILE:
+ 		inputfile = optarg;
+@@ -1082,8 +1080,6 @@ static int modifier(int opt)
+ 		foreground = 1;	
+ 		if (!(syslog_opt & SYSLOG_FORCE))
+ 			syslog_opt = SYSLOG_FORCE;
+-		if (logfile == logfile_default)
+-			logfile = NULL;
+ 		break;
+ 	case O_NUMERRORS:
+ 		numerrors = atoi(optarg);
+@@ -1110,6 +1106,9 @@ static int modifier(int opt)
+ 
+ static void modifier_finish(void)
+ {
++	if(!foreground && daemon_mode && !logfile && !(syslog_opt & SYSLOG_LOG)) {
++		logfile = logfile_default;
++	}
+ 	if (logfile) {
+ 		if (open_logfile(logfile) < 0) {
+ 			if (daemon_mode && !(syslog_opt & SYSLOG_FORCE))
+@@ -1174,8 +1173,8 @@ static void drop_cred(void)
+ static void process(int fd, unsigned recordlen, unsigned loglen, char *buf)
+ {	
+ 	int i; 
+-	int len;
+-	int finish = 0;
++	int len, count;
++	int finish = 0, flags;
+ 
+ 	if (recordlen == 0) {
+ 		Wprintf("no data in mce record\n");
+@@ -1188,7 +1187,14 @@ static void process(int fd, unsigned recordlen, unsigned loglen, char *buf)
+ 		return;
+ 	}
+ 
+-	for (i = 0; (i < len / (int)recordlen) && !finish; i++) { 
++	count = len / (int)recordlen;
++	if (count == (int)loglen) {
++		if ((ioctl(fd, MCE_GETCLEAR_FLAGS, &flags) == 0) &&
++		    (flags & (1 << MCE_OVERFLOW)))
++			Eprintf("Warning: MCE buffer is overflowed.\n");
++	}
++
++	for (i = 0; (i < count) && !finish; i++) {
+ 		struct mce *mce = (struct mce *)(buf + i*recordlen);
+ 		mce_prepare(mce);
+ 		if (numerrors > 0 && --numerrors == 0)
+diff --git a/p4.c b/p4.c
+index 93b59f3..86e7dc5 100644
+--- a/p4.c
++++ b/p4.c
+@@ -147,6 +147,7 @@ static void decode_mca(__u32 mca, u64 track, int cpu, int *ismemerr, int socket)
+ 		[3] = "External error",
+ 		[4] = "FRC error",
+ 		[5] = "Internal parity error",
++		[6] = "SMM Handler Code Access Violation",
+ 	};
+ 
+ 	if (mca & (1UL << 12)) {
+diff --git a/tests/test b/tests/test
+index c673eb2..35bebd2 100755
+--- a/tests/test
++++ b/tests/test
+@@ -1,4 +1,4 @@
+-#!/bin/sh
++#!/bin/bash
+ # simple test harness for mcelog daemon trigger test cases
+ # ./test subdir [debugger]
+ # run mcelog test in specific sub directory
+diff --git a/triggers/cache-error-trigger b/triggers/cache-error-trigger
+index e32bfd6..beb5f07 100755
+--- a/triggers/cache-error-trigger
++++ b/triggers/cache-error-trigger
+@@ -15,16 +15,11 @@
+ # this can be changed in mcelog.conf
+ 
+ #
+-# offline the CPUs (except CPU #0) sharing the affected cache
++# offline the CPUs sharing the affected cache
+ #
+ EXIT=0
+ 
+ for i in $AFFECTED_CPUS ; do
+-	if [ $i = 0 ] ; then
+-		logger -s -p daemon.warn -t mcelog "Not offlining CPU 0"	
+-		EXIT=1
+-		continue
+-	fi
+ 	logger -s -p daemon.crit -t mcelog "Offlining CPU $i due to cache error threshold"
+ 	F=$(printf "/sys/devices/system/cpu/cpu%d/online" $i)
+ 	echo 0 > $F

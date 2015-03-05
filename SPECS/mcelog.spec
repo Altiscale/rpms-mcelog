@@ -1,11 +1,11 @@
 %define	last_tar_git_commit d2e13bf0
-%define	last_git_commit 2577aeb
+%define	last_git_commit 9de4924
 
 Summary:	Tool to translate x86-64 CPU Machine Check Exception data
 Name:		mcelog
-Version:	1.0
-Release:	0.12.%{last_git_commit}%{?dist}
-Epoch:		2
+Version:	101
+Release:	3.%{last_git_commit}%{?dist}
+Epoch:		3
 Group:		System Environment/Base
 License:	GPLv2
 Source0:	mcelog-%{last_tar_git_commit}.tar.bz2
@@ -16,6 +16,10 @@ Source10:	mcelog.setup
 Patch0:		mcelog-fix-trigger-path-and-cacheing.patch
 # BZ 1039183: Add Haswell and correct Ivy Bridge
 Patch1:		mcelog-update-2577aeb.patch
+Patch2:		mcelog-update-f30da3d.patch
+# BZ 1138319: Add additional Haswell support (see patch for additional info)
+Patch3:		mcelog-haswell-support.patch
+Patch4:		mcelog-update-9de4924.patch
 URL:		https://github.com/andikleen/mcelog.git
 Buildroot:	%{_tmppath}/%{name}-%{version}-root
 ExclusiveArch:	i686 x86_64
@@ -32,6 +36,9 @@ on x86-32 and x86-64 systems. It can be run either as a daemon, or by cron.
 %setup -q -n %{name}-%{last_tar_git_commit}
 %patch0 -p1 -b .fix-triggers-and-cacheing
 %patch1 -p1 -b .mcelog-update-2577aeb
+%patch2 -p1 -b .mcelog-update-f30da3d
+%patch3 -p1 -b .mcelog-haswell-support
+%patch4 -p1 -b .mcelog-update-9de4924
 
 %build
 mkdir -p $RPM_BUILD_ROOT/%{_sysconfdir}
@@ -92,6 +99,20 @@ fi
 %attr(0644,root,root) %{_mandir}/*/*
 
 %changelog
+* Mon Oct 27 2014 Prarit Bhargava <prarit@redhat.com> - 3:101-3.9de4924
+- Update with latest minor fixes, no new support [1157683]
+
+* Mon Sep  8 2014 Prarit Bhargava <prarit@redhat.com> - 3:101-2.f30da3d
+- Additional Haswell Support [1138319]
+
+* Thu Sep  4 2014 Prarit Bhargava <prarit@redhat.com> - 3:101-1.f30da3d
+- Update to upstream NVR (101) [1136989]
+
+* Wed Sep  3 2014 Prarit Bhargava <prarit@redhat.com> - 2:1.0-0.13.f30da3d
+- Update to upstream commit f30da3d, minor fixes, no features [1085134]
+- Add /var/log/mcelog file [1098864]
+- remove .src.rpm file [1038755]
+
 * Wed Jan 22 2014 Prarit Bhargava <prarit@redhat.com> - 2:1.0-0.12.2577aeb
 - Add Haswell client cpuids, identify Ivy Bridge properly, and fix issues
   on Ivy Bridge

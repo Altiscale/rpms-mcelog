@@ -9,8 +9,9 @@ After=syslog.target
 # is allowed and expected to fail without aborting the daemon.
 
 [Service]
+Type=forking
 ExecStartPre=/etc/mcelog/mcelog.setup
-ExecStart=/usr/sbin/mcelog --ignorenodev --daemon --foreground
+ExecStart=/usr/sbin/mcelog --ignorenodev --daemon --syslog
 StandardOutput=syslog
 
 [Install]
