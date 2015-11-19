@@ -1,9 +1,9 @@
 %define	last_tar_git_commit d2e13bf0
-%define	last_git_commit 9de4924
+%define	last_git_commit e7e0ac1
 
 Summary:	Tool to translate x86-64 CPU Machine Check Exception data
 Name:		mcelog
-Version:	101
+Version:	120
 Release:	3.%{last_git_commit}%{?dist}
 Epoch:		3
 Group:		System Environment/Base
@@ -20,6 +20,8 @@ Patch2:		mcelog-update-f30da3d.patch
 # BZ 1138319: Add additional Haswell support (see patch for additional info)
 Patch3:		mcelog-haswell-support.patch
 Patch4:		mcelog-update-9de4924.patch
+Patch5:		mcelog-update-e7e0ac1.patch
+Patch6:		mcelog-patch-1bd2984.patch
 URL:		https://github.com/andikleen/mcelog.git
 Buildroot:	%{_tmppath}/%{name}-%{version}-root
 ExclusiveArch:	i686 x86_64
@@ -39,17 +41,19 @@ on x86-32 and x86-64 systems. It can be run either as a daemon, or by cron.
 %patch2 -p1 -b .mcelog-update-f30da3d
 %patch3 -p1 -b .mcelog-haswell-support
 %patch4 -p1 -b .mcelog-update-9de4924
+%patch5 -p1 -b .mcelog-update-e7e0ac1
+%patch6 -p1 -b .mcelog-patch-1bd2984
 
 %build
 mkdir -p $RPM_BUILD_ROOT/%{_sysconfdir}
 mkdir -p $RPM_BUILD_ROOT/%{_sbindir}
 mkdir -p $RPM_BUILD_ROOT/%{_mandir}
 
-make CFLAGS="$RPM_OPT_FLAGS -fpie -pie"
+make CFLAGS="$RPM_OPT_FLAGS  -Wl,-z,relro,-z,now -fpie" LDFLAGS="-Wl,-z,relro,-z,now -fpie -pie"
 
 %install
 rm -rf $RPM_BUILD_ROOT
-mkdir -p $RPM_BUILD_ROOT/%{_mandir}/man{1,8}
+mkdir -p $RPM_BUILD_ROOT/%{_mandir}/man{1,5,8}
 mkdir -p $RPM_BUILD_ROOT/%{_sysconfdir}/mcelog
 mkdir -p $RPM_BUILD_ROOT/%{_sysconfdir}/mcelog/triggers
 mkdir -p $RPM_BUILD_ROOT/%{_unitdir}
@@ -65,6 +69,8 @@ install -p -m755 triggers/socket-memory-error-trigger $RPM_BUILD_ROOT/%{_sysconf
 install -p -m755 mcelog.cron $RPM_BUILD_ROOT/%{_sysconfdir}/cron.hourly/mcelog.cron
 install -p -m644 %{SOURCE2} $RPM_BUILD_ROOT%{_unitdir}/mcelog.service
 install -p -m644 mcelog.8 $RPM_BUILD_ROOT/%{_mandir}/man8
+install -p -m644 mcelog.conf.5 $RPM_BUILD_ROOT/%{_mandir}/man5
+install -p -m644 mcelog.triggers.5 $RPM_BUILD_ROOT/%{_mandir}/man5
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -99,6 +105,15 @@ fi
 %attr(0644,root,root) %{_mandir}/*/*
 
 %changelog
+* Mon Sep 21 2015 Prarit Bhargava <prarit@redhat.com> - 3:120-3.e7e0ac1
+- Fix server restart when /var/run/mcelog-client socket exists [1256714]
+* Fri Jun 12 2015 Prarit Bhargava <prarit@redhat.com> - 3:120-2.e7e0ac1
+- add RELRO and PIE [1092567]
+* Fri Jun 12 2015 Prarit Bhargava <prarit@redhat.com> - 3:120-1.e7e0ac1
+- Add Broadwell-U, Broadwell-DE, and Knights Landing/Xeon Phi Support
+- additional general fixes
+- add mcelog.conf and mcelog.triggers man pages
+- update NVR to 120 to match upstream
 * Mon Oct 27 2014 Prarit Bhargava <prarit@redhat.com> - 3:101-3.9de4924
 - Update with latest minor fixes, no new support [1157683]
 
