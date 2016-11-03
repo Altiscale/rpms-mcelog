@@ -1,10 +1,10 @@
 %define	last_tar_git_commit d2e13bf0
-%define	last_git_commit e7e0ac1
+%define	last_git_commit e4aca63
 
 Summary:	Tool to translate x86-64 CPU Machine Check Exception data
 Name:		mcelog
-Version:	120
-Release:	3.%{last_git_commit}%{?dist}
+Version:	136
+Release:	1.%{last_git_commit}%{?dist}
 Epoch:		3
 Group:		System Environment/Base
 License:	GPLv2
@@ -22,6 +22,7 @@ Patch3:		mcelog-haswell-support.patch
 Patch4:		mcelog-update-9de4924.patch
 Patch5:		mcelog-update-e7e0ac1.patch
 Patch6:		mcelog-patch-1bd2984.patch
+Patch7:		mcelog-update-e4aca63.patch
 URL:		https://github.com/andikleen/mcelog.git
 Buildroot:	%{_tmppath}/%{name}-%{version}-root
 ExclusiveArch:	i686 x86_64
@@ -43,6 +44,7 @@ on x86-32 and x86-64 systems. It can be run either as a daemon, or by cron.
 %patch4 -p1 -b .mcelog-update-9de4924
 %patch5 -p1 -b .mcelog-update-e7e0ac1
 %patch6 -p1 -b .mcelog-patch-1bd2984
+%patch7 -p1 -b .mcelog-patch-e4aca63
 
 %build
 mkdir -p $RPM_BUILD_ROOT/%{_sysconfdir}
@@ -105,6 +107,11 @@ fi
 %attr(0644,root,root) %{_mandir}/*/*
 
 %changelog
+* Fri May 13 2016 Prarit Bhargava <prarit@redhat.com> - 3:136-1.e4aca63
+- update NVR to 136 to match upstream [1336431]
+- additional general fixes [1336431]
+- Skylake Client support (6,94) (6,78) [1255571]
+- Broadwell SoC/DE, EP & EX support (6,79) [1255572]
 * Mon Sep 21 2015 Prarit Bhargava <prarit@redhat.com> - 3:120-3.e7e0ac1
 - Fix server restart when /var/run/mcelog-client socket exists [1256714]
 * Fri Jun 12 2015 Prarit Bhargava <prarit@redhat.com> - 3:120-2.e7e0ac1

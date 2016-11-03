@@ -1,0 +1,3188 @@
+diff -urNp mcelog-d2e13bf0.orig/bitfield.c mcelog-d2e13bf0/bitfield.c
+--- mcelog-d2e13bf0.orig/bitfield.c	2016-05-14 08:34:40.434107718 -0400
++++ mcelog-d2e13bf0/bitfield.c	2016-05-14 08:34:58.868975011 -0400
+@@ -56,7 +56,7 @@ void decode_numfield(u64 status, struct
+ 		u64 v = (status >> f->start) & mask;
+ 		if (v > 0 || f->force) { 
+ 			char fmt[30];
+-			snprintf(fmt, 30, "%%s: %s\n", f->fmt ? f->fmt : "%Lu");
++			snprintf(fmt, 30, "%%s: %s\n", f->fmt ? f->fmt : "%llu");
+ 			Wprintf(fmt, f->name, v);
+ 		}
+ 	}
+diff -urNp mcelog-d2e13bf0.orig/bitfield.h mcelog-d2e13bf0/bitfield.h
+--- mcelog-d2e13bf0.orig/bitfield.h	2016-05-14 08:34:40.434107718 -0400
++++ mcelog-d2e13bf0/bitfield.h	2016-05-14 08:34:58.869975058 -0400
+@@ -16,10 +16,10 @@ struct numfield {
+ #define FIELD(start_bit, name) { start_bit, name, NELE(name) }
+ #define SBITFIELD(start_bit, string) { start_bit, ((char * [2]) { NULL, string }), 2 }
+ 
+-#define NUMBER(start, end, name) { start, end, name, "%Lu", 0 }
+-#define NUMBERFORCE(start, end, name) { start, end, name, "%Lu", 1 }
+-#define HEXNUMBER(start, end, name) { start, end, name, "%Lx", 0 }
+-#define HEXNUMBERFORCE(start, end, name) { start, end, name, "%Lx", 1 }
++#define NUMBER(start, end, name) { start, end, name, "%llu", 0 }
++#define NUMBERFORCE(start, end, name) { start, end, name, "%llu", 1 }
++#define HEXNUMBER(start, end, name) { start, end, name, "%llx", 0 }
++#define HEXNUMBERFORCE(start, end, name) { start, end, name, "%llx", 1 }
+ 
+ void decode_bitfield(u64 status, struct field *fields);
+ void decode_numfield(u64 status, struct numfield *fields);
+diff -urNp mcelog-d2e13bf0.orig/broadwell_de.c mcelog-d2e13bf0/broadwell_de.c
+--- mcelog-d2e13bf0.orig/broadwell_de.c	1969-12-31 19:00:00.000000000 -0500
++++ mcelog-d2e13bf0/broadwell_de.c	2016-05-14 08:34:58.869975058 -0400
+@@ -0,0 +1,104 @@
++/* Copyright (C) 2015 Intel Corporation
++   Decode Intel Broadwell D specific machine check errors.
++
++   mcelog is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public
++   License as published by the Free Software Foundation; version
++   2.
++
++   mcelog is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   General Public License for more details.
++
++   You should find a copy of v2 of the GNU General Public License somewhere
++   on your Linux system; if not, write to the Free Software Foundation,
++   Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++
++   Author: Tony Luck
++*/
++
++#include "mcelog.h"
++#include "bitfield.h"
++#include "broadwell_de.h"
++#include "memdb.h"
++
++/* See IA32 SDM Vol3B Table 16-24 */
++
++static char *pcu_1[] = {
++	[0x00] = "No Error",
++	[0x09] = "MC_MESSAGE_CHANNEL_TIMEOUT",
++	[0x13] = "MC_DMI_TRAINING_TIMEOUT",
++	[0x15] = "MC_DMI_CPU_RESET_ACK_TIMEOUT",
++	[0x1E] = "MC_VR_ICC_MAX_LT_FUSED_ICC_MAX",
++	[0x25] = "MC_SVID_COMMAN_TIMEOUT",
++	[0x26] = "MCA_PKGC_DIRECT_WAKE_RING_TIMEOUT",
++	[0x29] = "MC_VR_VOUT_MAC_LT_FUSED_SVID",
++	[0x2B] = "MC_PKGC_WATCHDOG_HANG_CBZ_DOWN",
++	[0x2C] = "MC_PKGC_WATCHDOG_HANG_CBZ_UP",
++	[0x44] = "MC_CRITICAL_VR_FAILED",
++	[0x46] = "MC_VID_RAMP_DOWN_FAILED",
++	[0x49] = "MC_SVID_WRITE_REG_VOUT_MAX_FAILED",
++	[0x4B] = "MC_BOOT_VID_TIMEOUT_DRAM_0",
++	[0x4F] = "MC_SVID_COMMAND_ERROR",
++	[0x52] = "MC_FIVR_CATAS_OVERVOL_FAULT",
++	[0x53] = "MC_FIVR_CATAS_OVERCUR_FAULT",
++	[0x57] = "MC_SVID_PKGC_REQUEST_FAILED",
++	[0x58] = "MC_SVID_IMON_REQUEST_FAILED",
++	[0x59] = "MC_SVID_ALERT_REQUEST_FAILED",
++	[0x62] = "MC_INVALID_PKGS_RSP_QPI",
++	[0x64] = "MC_INVALID_PKG_STATE_CONFIG",
++	[0x67] = "MC_HA_IMC_RW_BLOCK_ACK_TIMEOUT",
++	[0x6A] = "MC_MSGCH_PMREQ_CMP_TIMEOUT",
++	[0x72] = "MC_WATCHDOG_TIMEOUT_PKGS_MASTER",
++	[0x81] = "MC_RECOVERABLE_DIE_THERMAL_TOO_HOT"
++};
++
++static struct field pcu_mc4[] = {
++	FIELD(24, pcu_1),
++	{}
++};
++
++/* See IA32 SDM Vol3B Table 16-18 */
++
++static struct field memctrl_mc9[] = {
++	SBITFIELD(16, "Address parity error"),
++	SBITFIELD(17, "HA Wrt buffer Data parity error"),
++	SBITFIELD(18, "HA Wrt byte enable parity error"),
++	SBITFIELD(19, "Corrected patrol scrub error"),
++	SBITFIELD(20, "Uncorrected patrol scrub error"),
++	SBITFIELD(21, "Corrected spare error"),
++	SBITFIELD(22, "Uncorrected spare error"),
++	SBITFIELD(23, "Corrected memory read error"),
++	SBITFIELD(24, "iMC, WDB, parity errors"),
++	{}
++};
++
++void bdw_de_decode_model(int cputype, int bank, u64 status, u64 misc)
++{
++	switch (bank) {
++	case 4:
++		Wprintf("PCU: ");
++		switch (EXTRACT(status, 0, 15) & ~(1ull << 12)) {
++		case 0x402: case 0x403:
++			Wprintf("Internal errors ");
++			break;
++		case 0x406:
++			Wprintf("Intel TXT errors ");
++			break;
++		case 0x407:
++			Wprintf("Other UBOX Internal errors ");
++			break;
++		}
++		if (EXTRACT(status, 16, 19) & 3)
++			Wprintf("PCU internal error ");
++		if (EXTRACT(status, 20, 23) & 4)
++			Wprintf("Ubox error ");
++		decode_bitfield(status, pcu_mc4);
++		break;
++	case 9: case 10:
++		Wprintf("MemCtrl: ");
++		decode_bitfield(status, memctrl_mc9);
++		break;
++	}
++}
+diff -urNp mcelog-d2e13bf0.orig/broadwell_de.h mcelog-d2e13bf0/broadwell_de.h
+--- mcelog-d2e13bf0.orig/broadwell_de.h	1969-12-31 19:00:00.000000000 -0500
++++ mcelog-d2e13bf0/broadwell_de.h	2016-05-14 08:34:58.869975058 -0400
+@@ -0,0 +1,2 @@
++void bdw_d_decode_model(int cputype, int bank, u64 status, u64 misc);
++void bdw_de_decode_model(int cputype, int bank, u64 status, u64 misc);
+diff -urNp mcelog-d2e13bf0.orig/broadwell_epex.c mcelog-d2e13bf0/broadwell_epex.c
+--- mcelog-d2e13bf0.orig/broadwell_epex.c	1969-12-31 19:00:00.000000000 -0500
++++ mcelog-d2e13bf0/broadwell_epex.c	2016-05-14 08:34:58.869975058 -0400
+@@ -0,0 +1,149 @@
++/* Copyright (C) 2015 Intel Corporation
++   Decode Intel Broadwell specific machine check errors.
++
++   mcelog is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public
++   License as published by the Free Software Foundation; version
++   2.
++
++   mcelog is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   General Public License for more details.
++
++   You should find a copy of v2 of the GNU General Public License somewhere
++   on your Linux system; if not, write to the Free Software Foundation,
++   Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++
++   Author: Tony Luck
++*/
++
++#include "mcelog.h"
++#include "bitfield.h"
++#include "broadwell_epex.h"
++#include "memdb.h"
++
++/* See IA32 SDM Vol3B Table 16-20 */
++
++static char *pcu_1[] = {
++	[0x00] = "No Error",
++	[0x09] = "MC_MESSAGE_CHANNEL_TIMEOUT",
++	[0x0D] = "MC_IMC_FORCE_SR_S3_TIMEOUT",
++	[0x0E] = "MC_CPD_UNCPD_SD_TIMEOUT",
++	[0x13] = "MC_DMI_TRAINING_TIMEOUT",
++	[0x15] = "MC_DMI_CPU_RESET_ACK_TIMEOUT",
++	[0x1E] = "MC_VR_ICC_MAX_LT_FUSED_ICC_MAX",
++	[0x25] = "MC_SVID_COMMAN_TIMEOUT",
++	[0x29] = "MC_VR_VOUT_MAC_LT_FUSED_SVID",
++	[0x2B] = "MC_PKGC_WATCHDOG_HANG_CBZ_DOWN",
++	[0x2C] = "MC_PKGC_WATCHDOG_HANG_CBZ_UP",
++	[0x39] = "MC_PKGC_WATCHDOG_HANG_C3_UP_SF",
++	[0x44] = "MC_CRITICAL_VR_FAILED",
++	[0x45] = "MC_ICC_MAX_NOTSUPPORTED",
++	[0x46] = "MC_VID_RAMP_DOWN_FAILED",
++	[0x47] = "MC_EXCL_MODE_NO_PMREQ_CMP",
++	[0x48] = "MC_SVID_READ_REG_ICC_MAX_FAILED",
++	[0x49] = "MC_SVID_WRITE_REG_VOUT_MAX_FAILED",
++	[0x4B] = "MC_BOOT_VID_TIMEOUT_DRAM_0",
++	[0x4C] = "MC_BOOT_VID_TIMEOUT_DRAM_1",
++	[0x4D] = "MC_BOOT_VID_TIMEOUT_DRAM_2",
++	[0x4E] = "MC_BOOT_VID_TIMEOUT_DRAM_3",
++	[0x4F] = "MC_SVID_COMMAND_ERROR",
++	[0x52] = "MC_FIVR_CATAS_OVERVOL_FAULT",
++	[0x53] = "MC_FIVR_CATAS_OVERCUR_FAULT",
++	[0x57] = "MC_SVID_PKGC_REQUEST_FAILED",
++	[0x58] = "MC_SVID_IMON_REQUEST_FAILED",
++	[0x59] = "MC_SVID_ALERT_REQUEST_FAILED",
++	[0x60] = "MC_INVALID_PKGS_REQ_PCH",
++	[0x61] = "MC_INVALID_PKGS_REQ_QPI",
++	[0x62] = "MC_INVALID_PKGS_RSP_QPI",
++	[0x63] = "MC_INVALID_PKGS_RSP_PCH",
++	[0x64] = "MC_INVALID_PKG_STATE_CONFIG",
++	[0x67] = "MC_HA_IMC_RW_BLOCK_ACK_TIMEOUT",
++	[0x68] = "MC_IMC_RW_SMBUS_TIMEOUT",
++	[0x69] = "MC_HA_FAILSTS_CHANGE_DETECTED",
++	[0x6A] = "MC_MSGCH_PMREQ_CMP_TIMEOUT",
++	[0x70] = "MC_WATCHDOG_TIMEOUT_PKGC_SLAVE",
++	[0x71] = "MC_WATCHDOG_TIMEOUT_PKGC_MASTER",
++	[0x72] = "MC_WATCHDOG_TIMEOUT_PKGS_MASTER",
++	[0x7C] = "MC_BIOS_RST_CPL_INVALID_SEQ",
++	[0x7D] = "MC_MORE_THAN_ONE_TXT_AGENT",
++	[0x81] = "MC_RECOVERABLE_DIE_THERMAL_TOO_HOT"
++};
++
++static struct field pcu_mc4[] = {
++	FIELD(24, pcu_1),
++	{}
++};
++
++/* See IA32 SDM Vol3B Table 16-21 */
++
++static char *qpi[] = {
++	[0x02] = "Intel QPI physical layer detected drift buffer alarm",
++	[0x03] = "Intel QPI physical layer detected latency buffer rollover",
++	[0x10] = "Intel QPI link layer detected control error from R3QPI",
++	[0x11] = "Rx entered LLR abort state on CRC error",
++	[0x12] = "Unsupported or undefined packet",
++	[0x13] = "Intel QPI link layer control error",
++	[0x15] = "RBT used un-initialized value",
++	[0x20] = "Intel QPI physical layer detected a QPI in-band reset but aborted initialization",
++	[0x21] = "Link failover data self healing",
++	[0x22] = "Phy detected in-band reset (no width change)",
++	[0x23] = "Link failover clock failover",
++	[0x30] = "Rx detected CRC error - successful LLR after Phy re-init",
++	[0x31] = "Rx detected CRC error - successful LLR without Phy re-init",
++};
++
++static struct field qpi_mc[] = {
++	FIELD(16, qpi),
++	{}
++};
++
++/* See IA32 SDM Vol3B Table 16-26 */
++
++static struct field memctrl_mc9[] = {
++	SBITFIELD(16, "DDR3 address parity error"),
++	SBITFIELD(17, "Uncorrected HA write data error"),
++	SBITFIELD(18, "Uncorrected HA data byte enable error"),
++	SBITFIELD(19, "Corrected patrol scrub error"),
++	SBITFIELD(20, "Uncorrected patrol scrub error"),
++	SBITFIELD(21, "Corrected spare error"),
++	SBITFIELD(22, "Uncorrected spare error"),
++	SBITFIELD(24, "iMC write data buffer parity error"),
++	SBITFIELD(25, "DDR4 command address parity error"),
++	{}
++};
++
++void bdw_epex_decode_model(int cputype, int bank, u64 status, u64 misc)
++{
++	switch (bank) {
++	case 4:
++		Wprintf("PCU: ");
++		switch (EXTRACT(status, 0, 15) & ~(1ull << 12)) {
++		case 0x402: case 0x403:
++			Wprintf("Internal errors ");
++			break;
++		case 0x406:
++			Wprintf("Intel TXT errors ");
++			break;
++		case 0x407:
++			Wprintf("Other UBOX Internal errors ");
++			break;
++		}
++		if (EXTRACT(status, 16, 19))
++			Wprintf("PCU internal error ");
++		decode_bitfield(status, pcu_mc4);
++		break;
++	case 5:
++	case 20:
++	case 21:
++		Wprintf("QPI: ");
++		decode_bitfield(status, qpi_mc);
++		break;
++	case 9: case 10: case 11: case 12:
++	case 13: case 14: case 15: case 16:
++		Wprintf("MemCtrl: ");
++		decode_bitfield(status, memctrl_mc9);
++		break;
++	}
++}
+diff -urNp mcelog-d2e13bf0.orig/broadwell_epex.h mcelog-d2e13bf0/broadwell_epex.h
+--- mcelog-d2e13bf0.orig/broadwell_epex.h	1969-12-31 19:00:00.000000000 -0500
++++ mcelog-d2e13bf0/broadwell_epex.h	2016-05-14 08:34:58.869975058 -0400
+@@ -0,0 +1 @@
++void bdw_epex_decode_model(int cputype, int bank, u64 status, u64 misc);
+diff -urNp mcelog-d2e13bf0.orig/bus.c mcelog-d2e13bf0/bus.c
+--- mcelog-d2e13bf0.orig/bus.c	2016-05-14 08:34:40.446108283 -0400
++++ mcelog-d2e13bf0/bus.c	2016-05-14 08:34:58.869975058 -0400
+@@ -58,6 +58,9 @@ void run_bus_trigger(int socket, int cpu
+ 	char *msg;
+ 	char *location;
+ 
++	if (!bus_trigger)
++		return;
++
+ 	if (socket >= 0)
+ 		asprintf(&location, "CPU %d on socket %d", cpu, socket);
+ 	else
+@@ -67,9 +70,6 @@ void run_bus_trigger(int socket, int cpu
+ 	asprintf(&env[ei++], "LOCATION=%s", location);
+ 	free(location);
+ 
+-	if (!bus_trigger)
+-		goto out;
+-
+ 	if (socket >= 0)
+ 		asprintf(&env[ei++], "SOCKETID=%d", socket);
+ 	asprintf(&env[ei++], "MESSAGE=%s", msg);
+@@ -85,7 +85,6 @@ void run_bus_trigger(int socket, int cpu
+ 	run_trigger(bus_trigger, NULL, env);
+ 	for (i = 0; i < ei; i++)
+ 		free(env[i]);
+-out:
+ 	free(msg);
+ }
+ 
+@@ -97,6 +96,9 @@ void run_iomca_trigger(int socket, int c
+ 	char *msg;
+ 	char *location;
+ 
++	if (!iomca_trigger)
++		return;
++
+ 	if (socket >= 0)
+ 		asprintf(&location, "CPU %d on socket %d", cpu, socket);
+ 	else
+@@ -106,9 +108,6 @@ void run_iomca_trigger(int socket, int c
+ 	asprintf(&env[ei++], "LOCATION=%s", location);
+ 	free(location);
+ 
+-	if (!iomca_trigger)
+-		goto out;
+-
+ 	if (socket >= 0)
+ 		asprintf(&env[ei++], "SOCKETID=%d", socket);
+ 	asprintf(&env[ei++], "MESSAGE=%s", msg);
+@@ -123,7 +122,6 @@ void run_iomca_trigger(int socket, int c
+ 	run_trigger(iomca_trigger, NULL, env);
+ 	for (i = 0; i < ei; i++)
+ 		free(env[i]);
+-out:
+ 	free(msg);
+ 
+ }
+diff -urNp mcelog-d2e13bf0.orig/cache.c mcelog-d2e13bf0/cache.c
+--- mcelog-d2e13bf0.orig/cache.c	2016-05-14 08:34:40.434107718 -0400
++++ mcelog-d2e13bf0/cache.c	2016-05-14 08:34:58.869975058 -0400
+@@ -97,9 +97,14 @@ static void parse_cpumap(char *map, unsi
+ static void read_cpu_map(struct cache *c, char *cfn)
+ {
+ 	char *map = read_field(cfn, "shared_cpu_map");
++	if (map[0] == 0) {
++		c->cpumap = NULL;
++		goto out;
++	}
+ 	c->cpumaplen = cpumap_len(map);
+ 	c->cpumap = xalloc(c->cpumaplen);
+ 	parse_cpumap(map, c->cpumap, c->cpumaplen);
++out:
+ 	free(map);
+ }
+ 
+diff -urNp mcelog-d2e13bf0.orig/core2.c mcelog-d2e13bf0/core2.c
+--- mcelog-d2e13bf0.orig/core2.c	2016-05-14 08:34:40.434107718 -0400
++++ mcelog-d2e13bf0/core2.c	2016-05-14 08:34:58.869975058 -0400
+@@ -69,7 +69,7 @@ static struct field p6old_status[] = {
+ 	FIELD(31, reserved_1bit),
+ 	FIELD(32, reserved_3bits),
+ 	SBITFIELD(35, "BINIT received from external bus"),
+-	SBITFIELD(37, "Received hard error reponse on split transaction (Bus BINIT)"),
++	SBITFIELD(37, "Received hard error response on split transaction (Bus BINIT)"),
+ 	{}
+ };
+ 
+diff -urNp mcelog-d2e13bf0.orig/dimm.c mcelog-d2e13bf0/dimm.c
+--- mcelog-d2e13bf0.orig/dimm.c	2016-05-14 08:34:40.435107765 -0400
++++ mcelog-d2e13bf0/dimm.c	2016-05-14 08:34:58.870975105 -0400
+@@ -351,14 +351,14 @@ static void run_trigger(char *trigger, c
+ 		Eprintf("Cannot run error trigger %s for %s\n", trigger, loc);
+ 	open_dimm_db(NULL);
+ }
+-void new_error(unsigned long addr, unsigned long max_error, char *trigger)
++void new_error(unsigned long long addr, unsigned long max_error, char *trigger)
+ {
+ 	struct dmi_memdev **devs;
+ 	int i;
+ 
+ 	devs = dmi_find_addr(addr);
+ 	if (devs[0] == NULL) {
+-		Wprintf("No memory found for address %lx\n", addr);
++		Wprintf("No memory found for address %llx\n", addr);
+ 		exit(1);
+ 	}
+ 	for (i = 0; devs[i]; i++) {
+@@ -366,7 +366,7 @@ void new_error(unsigned long addr, unsig
+ 		char *loc = dmi_getstring(&d->header, d->device_locator);
+ 		struct group *g = find_entry(dimm_db, NULL, "Locator", loc);
+ 		if (!g) { // shouldn't happen
+-			Eprintf("No record found for %lx\n", addr);
++			Eprintf("No record found for %llx\n", addr);
+ 			return;
+ 		}
+ 		unsigned long val = inc_val(g, "corrected errors");
+diff -urNp mcelog-d2e13bf0.orig/dimm.h mcelog-d2e13bf0/dimm.h
+--- mcelog-d2e13bf0.orig/dimm.h	2016-05-14 08:34:40.435107765 -0400
++++ mcelog-d2e13bf0/dimm.h	2016-05-14 08:34:58.870975105 -0400
+@@ -1,6 +1,6 @@
+ void close_dimm_db(void);
+ int open_dimm_db(char *fn);
+-void new_error(unsigned long addr, unsigned long max_error, char *trigger);
++void new_error(unsigned long long addr, unsigned long max_error, char *trigger);
+ void reset_dimm(char *locator);
+ void gc_dimms(void);
+ void dump_all_dimms(void);
+diff -urNp mcelog-d2e13bf0.orig/dmi.c mcelog-d2e13bf0/dmi.c
+--- mcelog-d2e13bf0.orig/dmi.c	2016-05-14 08:34:40.446108283 -0400
++++ mcelog-d2e13bf0/dmi.c	2016-05-14 08:34:58.870975105 -0400
+@@ -1,6 +1,8 @@
+ /* Copyright (C) 2006 Andi Kleen, SuSE Labs.
++   Portions Copyright (C) 2016 Sergio Gelato.
++
+    Use SMBIOS/DMI to map address to DIMM description.
+-   For reference see the SMBIOS specification 2.4
++   For reference see the SMBIOS specification 2.4, 3.0
+ 
+    dmi is free software; you can redistribute it and/or
+    modify it under the terms of the GNU General Public
+@@ -55,9 +57,9 @@ struct anchor {
+ } __attribute__((packed));
+ 
+ static struct dmi_entry *entries;
+-static int entrieslen;
++static size_t entrieslen;
+ static int numentries;
+-static int dmi_length;
++static size_t dmi_length;
+ static struct dmi_entry **handle_to_entry;
+ 
+ struct dmi_memdev **dmi_dimms; 
+@@ -137,6 +139,59 @@ static void fill_handles(void)
+ 	}
+ }
+ 
++static int append_sysfs_dmi_entry(unsigned char type, int instance)
++{
++	char filename[64];	/* 40 bytes should be enough */
++	char buf[1024];
++	int r;
++	ssize_t nr;
++	size_t l;
++	int fd;
++	r = snprintf(filename, sizeof(filename),
++		     "/sys/firmware/dmi/entries/%hhu-%d/raw",
++		     type, instance);
++	if (r < 0 || (unsigned int)r >= sizeof(filename)) {
++		Eprintf("Can't build pathname for DMI type %hhu instance %d\n",
++			type, instance);
++		return 0;
++	}
++	fd = open(filename, O_RDONLY);
++	if (fd == (-1)) {
++		if (errno != ENOENT)
++			perror(filename);
++		return 0;
++	}
++	l = dmi_length;
++	for (;;) {
++		nr = read(fd, buf, sizeof(buf));
++		if (nr < 0) {
++			if (errno == EINTR)
++				continue;
++			perror(filename);
++			close(fd);
++			return 0;
++		} else if (nr > 0) {
++			while (l + nr > entrieslen) {
++				entrieslen += 4096;
++				entries = xrealloc(entries, entrieslen);
++			}
++			memcpy((char *)entries+l, buf, nr);
++			l += nr;
++		} else {
++			numentries ++;
++			dmi_length = l;
++			close(fd);
++			return 1;
++		}
++	}
++}
++
++static void append_sysfs_dmi_entries(unsigned char type)
++{
++	int i;
++	for (i=0; append_sysfs_dmi_entry(type, i); i++) ;
++}
++
+ static int get_efi_base_addr(size_t *address)
+ {
+ 	FILE *efi_systab;
+@@ -190,10 +245,12 @@ check_symbol:
+ int opendmi(void)
+ {
+ 	struct anchor *a, *abase;
++	void *ebase;
+ 	void *p, *q;
+ 	int pagesize = getpagesize();
+ 	int memfd; 
+-	unsigned corr;
++	off_t emapbase, corr;
++	size_t emapsize;
+ 	int err = -1;
+ 	const int segsize = 0x10000;
+ 	size_t entry_point_addr = 0;
+@@ -201,6 +258,18 @@ int opendmi(void)
+ 
+ 	if (entries)
+ 		return 0;
++
++	if (access("/sys/firmware/dmi/entries/0-0/raw", R_OK) == 0) {
++		numentries = 0;
++		append_sysfs_dmi_entries(DMI_MEMORY_ARRAY);
++		append_sysfs_dmi_entries(DMI_MEMORY_DEVICE);
++		append_sysfs_dmi_entries(DMI_MEMORY_ARRAY_ADDR);
++		append_sysfs_dmi_entries(DMI_MEMORY_MAPPED_ADDR);
++		fill_handles();
++		collect_dmi_dimms();
++		return 0;
++	}
++
+ 	memfd = open("/dev/mem", O_RDONLY);
+ 	if (memfd < 0) { 
+ 		Eprintf("Cannot open /dev/mem for DMI decoding: %s",
+@@ -228,8 +297,6 @@ int opendmi(void)
+ 		}
+ 		a = (struct anchor*)((char*)abase + (entry_point_addr - addr_start));
+ 		goto fill_entries;
+-	} else {
+-		return -1;
+ 	}
+ 
+ legacy:
+@@ -264,17 +331,18 @@ fill_entries:
+ 	if (verbose) 
+ 		printf("DMI tables at %x, %u bytes, %u entries\n", 
+ 			a->table, a->length, a->numentries);
+-	corr = a->table - round_down(a->table, pagesize); 
+-	entrieslen = round_up(a->table + a->length, pagesize) -
+-		round_down(a->table, pagesize);
+- 	entries = mmap(NULL, entrieslen, 
+-		       	PROT_READ, MAP_SHARED, memfd, 
+-			round_down(a->table, pagesize));
+-	if (entries == (struct dmi_entry *)-1) { 
++	emapbase = round_down(a->table, pagesize);
++	corr = a->table - emapbase;
++	emapsize = round_up(a->table + a->length, pagesize) - emapbase;
++	ebase = mmap(NULL, emapsize, PROT_READ, MAP_SHARED, memfd, emapbase);
++	if (ebase == MAP_FAILED) {
+ 		Eprintf("Cannot mmap SMBIOS tables at %x", a->table);
+ 		goto out_mmap;
+ 	}
+-	entries = (struct dmi_entry *)(((char *)entries) + corr);
++	entrieslen = a->length;
++	entries = xalloc_nonzero(entrieslen);
++	memcpy(entries, (char *)ebase+corr, entrieslen);
++	munmap(ebase, emapsize);
+ 	numentries = a->numentries;
+ 	dmi_length = a->length;
+ 	fill_handles();
+@@ -307,13 +375,15 @@ static char *form_factors[] = {
+ 	"?",
+ 	"Other", "Unknown", "SIMM", "SIP", "Chip", "DIP", "ZIP", 
+ 	"Proprietary Card", "DIMM", "TSOP", "Row of chips", "RIMM",
+-	"SODIMM", "SRIMM"
++	"SODIMM", "SRIMM", "FB-DIMM"
+ };
+ static char *memory_types[] = {
+ 	"?",
+ 	"Other", "Unknown", "DRAM", "EDRAM", "VRAM", "SRAM", "RAM",
+ 	"ROM", "FLASH", "EEPROM", "FEPROM", "EPROM", "CDRAM", "3DRAM",
+-	"SDRAM", "SGRAM", "RDRAM", "DDR", "DDR2"
++	"SDRAM", "SGRAM", "RDRAM", "DDR", "DDR2", "DDR2 FB-DIMM",
++	"Reserved 0x15", "Reserved 0x16", "Reserved 0x17", "DDR3",
++	"FBD2", "DDR4", "LPDDR", "LPDDR2", "LPDDR3", "LPDDR4"
+ };
+ 
+ #define LOOKUP(array, val, buf) \
+@@ -324,7 +394,8 @@ static char *memory_types[] = {
+ static char *type_details[16] = {
+ 	"Reserved", "Other", "Unknown", "Fast-paged", "Static Column",
+ 	"Pseudo static", "RAMBUS", "Synchronous", "CMOS", "EDO",
+-	"Window DRAM", "Cache DRAM", "Non-volatile", "Res13", "Res14", "Res15"
++	"Window DRAM", "Cache DRAM", "Non-volatile", "Registered",
++	"Unbuffered", "LRDIMM"
+ }; 
+ 
+ static void dump_type_details(unsigned short td)
+@@ -337,7 +408,7 @@ static void dump_type_details(unsigned s
+ 			Wprintf("%s ", type_details[i]);
+ }
+ 
+-static void dump_memdev(struct dmi_memdev *md, unsigned long addr)
++static void dump_memdev(struct dmi_memdev *md, unsigned long long addr)
+ {
+ 	char tmp[20];
+ 	char unit[10];
+@@ -346,7 +417,7 @@ static void dump_memdev(struct dmi_memde
+ 	if (md->header.length < 
+ 			offsetof(struct dmi_memdev, manufacturer)) { 
+ 		if (verbose > 0)
+-			printf("Memory device for address %lx too short %u\n",
++			printf("Memory device for address %llx too short %u\n",
+ 			       addr, md->header.length);
+ 		return;
+ 	}	
+@@ -500,7 +571,7 @@ int dmi_sanity_check(void)
+ 						dmi_dimms[i]->device_locator);
+ 			if (!strcmp(b, loc)) {
+ 				if (verbose > 0)
+-					printf("Ambigious locators `%s'<->`%s'."
++					printf("Ambiguous locators `%s'<->`%s'."
+ 					       FAILED, b, loc);
+ 				return 0;
+ 			}
+@@ -538,7 +609,7 @@ dump_ranges(struct dmi_memdev_addr **ran
+ 			DMIGET(dmi_dimms[i],device_set));
+ }
+ 
+-struct dmi_memdev **dmi_find_addr(unsigned long addr)
++struct dmi_memdev **dmi_find_addr(unsigned long long addr)
+ {
+ 	struct dmi_memdev **devs; 
+ 	int i, k;
+@@ -582,7 +653,7 @@ struct dmi_memdev **dmi_find_addr(unsign
+ 	return devs;
+ }
+ 
+-void dmi_decodeaddr(unsigned long addr)
++void dmi_decodeaddr(unsigned long long addr)
+ {
+ 	struct dmi_memdev **devs = dmi_find_addr(addr);
+ 	if (devs[0]) { 
+@@ -591,7 +662,7 @@ void dmi_decodeaddr(unsigned long addr)
+ 		for (i = 0; devs[i]; i++) 
+ 			dump_memdev(devs[i], addr);
+ 	} else { 
+-		Wprintf("No DIMM found for %lx in SMBIOS\n", addr);
++		Wprintf("No DIMM found for %llx in SMBIOS\n", addr);
+ 	}
+ 	free(devs);
+ } 
+@@ -625,11 +696,11 @@ void closedmi(void)
+ {
+ 	if (!entries) 
+ 		return;
+-	munmap(entries, entrieslen);
+-	entries = NULL;
+ 	FREE(dmi_dimms);
+ 	FREE(dmi_arrays);
+ 	FREE(dmi_ranges);
+ 	FREE(dmi_array_ranges);
+ 	FREE(handle_to_entry);
++	FREE(entries);
++	entrieslen = 0;
+ }
+diff -urNp mcelog-d2e13bf0.orig/dmi.h mcelog-d2e13bf0/dmi.h
+--- mcelog-d2e13bf0.orig/dmi.h	2016-05-14 08:34:40.435107765 -0400
++++ mcelog-d2e13bf0/dmi.h	2016-05-14 08:34:58.870975105 -0400
+@@ -62,10 +62,10 @@ struct dmi_memarray_addr {
+ }  __attribute__((packed));
+ 
+ int opendmi(void);
+-void dmi_decodeaddr(unsigned long addr);
++void dmi_decodeaddr(unsigned long long addr);
+ int dmi_sanity_check(void);
+ unsigned dmi_dimm_size(unsigned short size, char *unit);
+-struct dmi_memdev **dmi_find_addr(unsigned long addr);
++struct dmi_memdev **dmi_find_addr(unsigned long long addr);
+ void dmi_set_verbosity(int v);
+ 
+ char *dmi_getstring(struct dmi_entry *e, unsigned number);
+diff -urNp mcelog-d2e13bf0.orig/genconfig.py mcelog-d2e13bf0/genconfig.py
+--- mcelog-d2e13bf0.orig/genconfig.py	2016-05-14 08:34:40.436107812 -0400
++++ mcelog-d2e13bf0/genconfig.py	2016-05-14 08:34:58.870975105 -0400
+@@ -66,7 +66,7 @@ def new_option():
+ 
+ 
+ print """
+-.\" Auto generated mcelog.conf manpage. Do not edit.
++.\\" Auto generated mcelog.conf manpage. Do not edit.
+ .TH "mcelog.conf" 5 "mcelog"
+ """
+ 
+diff -urNp mcelog-d2e13bf0.orig/haswell.c mcelog-d2e13bf0/haswell.c
+--- mcelog-d2e13bf0.orig/haswell.c	2016-05-14 08:34:40.445108236 -0400
++++ mcelog-d2e13bf0/haswell.c	2016-05-14 08:34:58.870975105 -0400
+@@ -91,7 +91,7 @@ static char *qpi[] = {
+ 	[0x22] = "Phy detected in-band reset (no width change)",
+ 	[0x23] = "Link failover clock failover",
+ 	[0x30] = "Rx detected CRC error - successful LLR after Phy re-init",
+-	[0x31] = "Rx detected CRC error - successful LLR wihout Phy re-init",
++	[0x31] = "Rx detected CRC error - successful LLR without Phy re-init",
+ };
+ 
+ static struct field qpi_mc[] = {
+diff -urNp mcelog-d2e13bf0.orig/intel.c mcelog-d2e13bf0/intel.c
+--- mcelog-d2e13bf0.orig/intel.c	2016-05-14 08:34:40.434107718 -0400
++++ mcelog-d2e13bf0/intel.c	2016-05-14 08:36:22.435906530 -0400
+@@ -35,7 +35,8 @@ void intel_cpu_init(enum cputype cpu)
+ 	    cpu == CPU_SANDY_BRIDGE || cpu == CPU_SANDY_BRIDGE_EP ||
+ 	    cpu == CPU_IVY_BRIDGE || cpu == CPU_IVY_BRIDGE_EPEX ||
+ 	    cpu == CPU_HASWELL || cpu == CPU_HASWELL_EPEX || cpu == CPU_BROADWELL ||
+-	    cpu == CPU_KNIGHTS_LANDING)
++	    cpu == CPU_BROADWELL_DE || cpu == CPU_BROADWELL_EPEX ||
++	    cpu == CPU_KNIGHTS_LANDING || cpu == CPU_SKYLAKE || cpu == CPU_SKYLAKE_XEON)
+ 		memory_error_support = 1;
+ }
+ 
+@@ -73,15 +74,23 @@ enum cputype select_intel_cputype(int fa
+ 			return CPU_HASWELL;
+ 		else if (model == 0x3f)
+ 			return CPU_HASWELL_EPEX;
+-		else if (model == 0x3d || model == 0x56)
++		else if (model == 0x3d)
+ 			return CPU_BROADWELL;
+-		else if (model == 0x57)
++		else if (model == 0x4f)
++			return CPU_BROADWELL_EPEX;
++		else if (model == 0x56)
++			return CPU_BROADWELL_DE;
++ 		else if (model == 0x57)
+ 			return CPU_KNIGHTS_LANDING;
+ 		else if (model == 0x1c || model == 0x26 || model == 0x27 ||
+ 			 model == 0x35 || model == 0x36 || model == 0x36 ||
+ 			 model == 0x37 || model == 0x4a || model == 0x4c ||
+ 			 model == 0x4d || model == 0x5a || model == 0x5d)
+ 			return CPU_ATOM;
++		else if (model == 0x4e || model == 0x5e)
++			return CPU_SKYLAKE;
++		else if (model == 0x55)
++			return CPU_SKYLAKE_XEON;
+ 		if (model > 0x1a) {
+ 			Eprintf("Family 6 Model %x CPU: only decoding architectural errors\n",
+ 				model);
+diff -urNp mcelog-d2e13bf0.orig/intel.c.orig mcelog-d2e13bf0/intel.c.orig
+--- mcelog-d2e13bf0.orig/intel.c.orig	1969-12-31 19:00:00.000000000 -0500
++++ mcelog-d2e13bf0/intel.c.orig	2016-05-14 08:34:23.043289544 -0400
+@@ -0,0 +1,159 @@
++/* Copyright (C) 2009 Intel Corporation 
++   Author: Andi Kleen
++   Common Intel CPU code.
++
++   mcelog is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public
++   License as published by the Free Software Foundation; version
++   2.
++
++   mcelog is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   General Public License for more details.
++
++   You should find a copy of v2 of the GNU General Public License somewhere
++   on your Linux system; if not, write to the Free Software Foundation, 
++   Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA */
++#include <stddef.h>
++#include "mcelog.h"
++#include "intel.h"
++#include "bitfield.h"
++#include "nehalem.h"
++#include "memdb.h"
++#include "page.h"
++#include "sandy-bridge.h"
++#include "ivy-bridge.h"
++#include "haswell.h"
++#include "xeon75xx.h"
++
++int memory_error_support;
++
++void intel_cpu_init(enum cputype cpu)
++{
++	if (cpu == CPU_NEHALEM || cpu == CPU_XEON75XX || cpu == CPU_INTEL ||
++	    cpu == CPU_SANDY_BRIDGE || cpu == CPU_SANDY_BRIDGE_EP ||
++	    cpu == CPU_IVY_BRIDGE || cpu == CPU_IVY_BRIDGE_EPEX ||
++	    cpu == CPU_HASWELL || cpu == CPU_HASWELL_EPEX || cpu == CPU_BROADWELL ||
++	    cpu == CPU_KNIGHTS_LANDING)
++		memory_error_support = 1;
++}
++
++enum cputype select_intel_cputype(int family, int model)
++{
++	if (family == 15) { 
++		if (model == 6) 
++			return CPU_TULSA;
++		return CPU_P4;
++	} 
++	if (family == 6) { 
++		if (model >= 0x1a && model != 28) 
++			memory_error_support = 1;
++
++		if (model < 0xf) 
++			return CPU_P6OLD;
++		else if (model == 0xf || model == 0x17) /* Merom/Penryn */
++			return CPU_CORE2;
++		else if (model == 0x1d)
++			return CPU_DUNNINGTON;
++		else if (model == 0x1a || model == 0x2c || model == 0x1e ||
++			 model == 0x25)
++			return CPU_NEHALEM;
++		else if (model == 0x2e || model == 0x2f)
++			return CPU_XEON75XX;
++		else if (model == 0x2a)
++			return CPU_SANDY_BRIDGE;
++		else if (model == 0x2d)
++			return CPU_SANDY_BRIDGE_EP;
++		else if (model == 0x3a)
++			return CPU_IVY_BRIDGE;
++		else if (model == 0x3e)
++			return CPU_IVY_BRIDGE_EPEX;
++		else if (model == 0x3c || model == 0x45 || model == 0x46)
++			return CPU_HASWELL;
++		else if (model == 0x3f)
++			return CPU_HASWELL_EPEX;
++		else if (model == 0x3d || model == 0x56)
++			return CPU_BROADWELL;
++		else if (model == 0x57)
++			return CPU_KNIGHTS_LANDING;
++		else if (model == 0x1c || model == 0x26 || model == 0x27 ||
++			 model == 0x35 || model == 0x36 || model == 0x36 ||
++			 model == 0x37 || model == 0x4a || model == 0x4c ||
++			 model == 0x4d || model == 0x5a || model == 0x5d)
++			return CPU_ATOM;
++		if (model > 0x1a) {
++			Eprintf("Family 6 Model %x CPU: only decoding architectural errors\n",
++				model);
++			return CPU_INTEL; 
++		}
++	}
++	if (family > 6) { 
++		Eprintf("Family %u Model %x CPU: only decoding architectural errors\n",
++				family, model);
++		return CPU_INTEL;
++	}
++	Eprintf("Unknown Intel CPU type family %x model %x\n", family, model);
++	return family == 6 ? CPU_P6OLD : CPU_GENERIC;
++}
++
++int is_intel_cpu(int cpu)
++{
++	switch (cpu) {
++	CASE_INTEL_CPUS:
++		return 1;
++	} 
++	return 0;
++}
++
++static int intel_memory_error(struct mce *m, unsigned recordlen)
++{
++	u32 mca = m->status & 0xffff;
++	if ((mca >> 7) == 1) { 
++		unsigned corr_err_cnt = 0;
++		int channel[2] = { (mca & 0xf) == 0xf ? -1 : (int)(mca & 0xf), -1 };
++		int dimm[2] = { -1, -1 };
++
++		switch (cputype) { 
++		case CPU_NEHALEM:
++			nehalem_memerr_misc(m, channel, dimm);
++			break;
++		case CPU_XEON75XX:
++			xeon75xx_memory_error(m, recordlen, channel, dimm);
++			break;
++		case CPU_SANDY_BRIDGE_EP:
++			sandy_bridge_ep_memerr_misc(m, channel, dimm);
++			break;
++		case CPU_IVY_BRIDGE_EPEX:
++			ivy_bridge_ep_memerr_misc(m, channel, dimm);
++			break;
++		default:
++			break;
++		} 
++
++		if (recordlen > offsetof(struct mce, mcgcap) && m->mcgcap & MCG_CMCI_P)
++ 			corr_err_cnt = EXTRACT(m->status, 38, 52);
++		memory_error(m, channel[0], dimm[0], corr_err_cnt, recordlen);
++		account_page_error(m, channel[0], dimm[0]);
++
++		/* 
++		 * When both DIMMs have a error account the error twice to the page.
++		 */
++		if (channel[1] != -1) {
++			memory_error(m, channel[1], dimm[1], corr_err_cnt, recordlen);
++			account_page_error(m, channel[1], dimm[1]);
++		}
++
++		return 1;
++	}
++
++	return 0;
++}
++
++/* No bugs known, but filter out memory errors if the user asked for it */
++int mce_filter_intel(struct mce *m, unsigned recordlen)
++{
++	if (intel_memory_error(m, recordlen) == 1) 
++		return !filter_memory_errors;
++	return 1;
++}
+diff -urNp mcelog-d2e13bf0.orig/intel.h mcelog-d2e13bf0/intel.h
+--- mcelog-d2e13bf0.orig/intel.h	2016-05-14 08:34:40.444108189 -0400
++++ mcelog-d2e13bf0/intel.h	2016-05-14 08:34:58.871975152 -0400
+@@ -21,5 +21,10 @@ extern int memory_error_support;
+ 	case CPU_HASWELL: \
+ 	case CPU_HASWELL_EPEX: \
+ 	case CPU_BROADWELL: \
+-	case CPU_KNIGHTS_LANDING
++	case CPU_BROADWELL_DE: \
++	case CPU_BROADWELL_EPEX: \
++	case CPU_ATOM:	\
++	case CPU_KNIGHTS_LANDING: \
++	case CPU_SKYLAKE: \
++	case CPU_SKYLAKE_XEON
+ 
+diff -urNp mcelog-d2e13bf0.orig/k8.c mcelog-d2e13bf0/k8.c
+--- mcelog-d2e13bf0.orig/k8.c	2016-05-14 08:34:40.437107859 -0400
++++ mcelog-d2e13bf0/k8.c	2016-05-14 08:34:58.871975152 -0400
+@@ -89,7 +89,7 @@ static char *highbits[32] = {
+ 	[0] = "err cpu0",
+ };
+ static char *k8threshold[] = {
+-	[0 ... K8_MCELOG_THRESHOLD_DRAM_ECC - 1] = "Unknow threshold counter",
++	[0 ... K8_MCELOG_THRESHOLD_DRAM_ECC - 1] = "Unknown threshold counter",
+ 	[K8_MCELOG_THRESHOLD_DRAM_ECC] = "MC4_MISC0 DRAM threshold",
+ 	[K8_MCELOG_THRESHOLD_LINK] = "MC4_MISC1 Link threshold",
+ 	[K8_MCELOG_THRESHOLD_L3_CACHE] = "MC4_MISC2 L3 Cache threshold",
+diff -urNp mcelog-d2e13bf0.orig/Makefile mcelog-d2e13bf0/Makefile
+--- mcelog-d2e13bf0.orig/Makefile	2016-05-14 08:34:40.447108330 -0400
++++ mcelog-d2e13bf0/Makefile	2016-05-14 08:34:58.868975011 -0400
+@@ -30,15 +30,18 @@ TRIGGERS=cache-error-trigger dimm-error-
+ 
+ all: mcelog
+ 
+-.PHONY: install clean depend
++.PHONY: install clean depend FORCE
+ 
+ OBJ := p4.o k8.o mcelog.o dmi.o tsc.o core2.o bitfield.o intel.o \
+        nehalem.o dunnington.o tulsa.o config.o memutil.o msg.o   \
+        eventloop.o leaky-bucket.o memdb.o server.o trigger.o 	 \
+        client.o cache.o sysfs.o yellow.o page.o rbtree.o 	 \
+-       xeon75xx.o sandy-bridge.o ivy-bridge.o haswell.o msr.o bus.o unknown.o
++       xeon75xx.o sandy-bridge.o ivy-bridge.o haswell.o		 \
++       broadwell_de.o broadwell_epex.o skylake_xeon.o		 \
++       msr.o bus.o unknown.o
+ DISKDB_OBJ := diskdb.o dimm.o db.o
+-CLEAN := mcelog dmi tsc dbquery .depend .depend.X dbquery.o ${DISKDB_OBJ}
++CLEAN := mcelog dmi tsc dbquery .depend .depend.X dbquery.o ${DISKDB_OBJ} \
++	version.o version.c version.tmp
+ DOC := mce.pdf
+ 
+ ADD_DEFINES :=
+@@ -52,7 +55,7 @@ endif
+ 
+ SRC := $(OBJ:.o=.c)
+ 
+-mcelog: ${OBJ}
++mcelog: ${OBJ} version.o
+ 
+ # dbquery intentionally not installed by default
+ install: mcelog mcelog.conf mcelog.conf.5 mcelog.triggers.5
+@@ -80,7 +83,7 @@ clean: test-clean
+ 	rm -f ${CLEAN} ${OBJ} 
+ 
+ tsc:    tsc.c
+-	gcc -o tsc ${CFLAGS} -DSTANDALONE tsc.c ${LDFLAGS}
++	$(CC) -o tsc ${CFLAGS} -DSTANDALONE tsc.c ${LDFLAGS}
+ 
+ dbquery: db.o dbquery.o memutil.o
+ 
+@@ -89,6 +92,21 @@ depend: .depend
+ %.o: %.c
+ 	$(CC) -c $(CFLAGS) $(CPPFLAGS) $(WARNINGS) $(ADD_DEFINES) -o $@ $<
+ 
++version.tmp: FORCE
++	( echo -n "char version[] = \"" ; 	\
++	if type -p git >/dev/null; then 	\
++	if [ -d .git ] ; then 			\
++		git describe --tags HEAD | tr -d '\n'; 	\
++	else 					\
++		echo -n "unknown" ; 		\
++	fi ;					\
++	else echo -n "unknown" ; fi ;		\
++	echo '";'				\
++	 ) > version.tmp
++
++version.c: version.tmp
++	cmp version.tmp version.c || mv version.tmp version.c
++
+ .depend: ${SRC}
+ 	${CC} -MM -I. ${SRC} > .depend.X && mv .depend.X .depend
+ 
+@@ -111,7 +129,7 @@ src:
+ 	echo $(SRC)
+ 
+ config-test: config.c
+-	gcc -DTEST=1 config.c -o config-test
++	$(CC) -DTEST=1 config.c -o config-test
+ 
+ test:
+ 	$(MAKE) -C tests test DEBUG=""
+diff -urNp mcelog-d2e13bf0.orig/mcelog.8 mcelog-d2e13bf0/mcelog.8
+--- mcelog-d2e13bf0.orig/mcelog.8	2016-05-14 08:34:40.437107859 -0400
++++ mcelog-d2e13bf0/mcelog.8	2016-05-14 08:34:58.871975152 -0400
+@@ -16,6 +16,8 @@ mcelog [options] \-\-ascii
+ .\".br
+ .\"mcelog [options] \-\-dump-memory[=locator]
+ .br
++mcelog [options] \-\-is\-cpu\-supported
++.br
+ mcelog \-\-version
+ .SH DESCRIPTION
+ X86 CPUs report errors detected by the CPU as
+@@ -81,6 +83,10 @@ store it anymore (different from
+ so the output should be always saved somewhere and mcelog
+ not run in uncontrolled ways.
+ 
++When invoked with the
++.I \-\-is\-cpu\-supported
++option mcelog exits with code 0 if the current CPU is supported, 1 otherwise.
++
+ .SH OPTIONS
+ When the 
+ .B \-\-syslog
+@@ -294,7 +300,7 @@ For more information on the config file
+ The kernel prefers old messages over new. If the log buffer overflows
+ only old ones will be kept.
+ 
+-The exact output in the log file depends on the CPU, unless the --raw option is used.
++The exact output in the log file depends on the CPU, unless the \-\-raw option is used.
+ 
+ mcelog will report serious errors to the syslog during decoding.
+ 
+diff -urNp mcelog-d2e13bf0.orig/mcelog.c mcelog-d2e13bf0/mcelog.c
+--- mcelog-d2e13bf0.orig/mcelog.c	2016-05-14 08:34:40.444108189 -0400
++++ mcelog-d2e13bf0/mcelog.c	2016-05-14 08:37:03.210824839 -0400
+@@ -85,6 +85,7 @@ static char *pidfile = pidfile_default;
+ static char *logfile;
+ static int debug_numerrors;
+ int imc_log = -1;
++static int check_only = 0;
+ 
+ static int is_cpu_supported(void);
+ 
+@@ -131,7 +132,7 @@ static char *bankname(unsigned bank)
+ 	}
+ } 
+ 
+-static void resolveaddr(unsigned long addr)
++static void resolveaddr(unsigned long long addr)
+ {
+ 	if (addr && do_dmi && dmi_forced)
+ 		dmi_decodeaddr(addr);
+@@ -232,8 +233,12 @@ static char *cputype_name[] = {
+ 	[CPU_HASWELL] = "Haswell", /* Fill in better name */
+ 	[CPU_HASWELL_EPEX] = "Haswell EP/EX", /* Fill in better name */
+ 	[CPU_BROADWELL] = "Broadwell",
++	[CPU_BROADWELL_DE] = "Intel Xeon (Broadwell) D family",
++	[CPU_BROADWELL_EPEX] = "Intel Xeon v4 (Broadwell) EP/EX",
+ 	[CPU_KNIGHTS_LANDING] = "Knights Landing",
+ 	[CPU_ATOM] = "ATOM",
++	[CPU_SKYLAKE] = "Skylake",
++	[CPU_SKYLAKE_XEON] = "Skylake server",
+ };
+ 
+ static struct config_choice cpu_choices[] = {
+@@ -273,8 +278,14 @@ static struct config_choice cpu_choices[
+ 	{ "haswell-ep", CPU_HASWELL_EPEX }, /* Fill in better name */
+ 	{ "haswell-ex", CPU_HASWELL_EPEX }, /* Fill in better name */
+ 	{ "broadwell", CPU_BROADWELL },
++	{ "broadwell-d", CPU_BROADWELL_DE },
++	{ "broadwell-ep", CPU_BROADWELL_EPEX },
++	{ "broadwell-ex", CPU_BROADWELL_EPEX },
+ 	{ "knightslanding", CPU_KNIGHTS_LANDING },
++	{ "xeon-v4", CPU_BROADWELL_EPEX },
+ 	{ "atom", CPU_ATOM },
++	{ "skylake", CPU_SKYLAKE },
++	{ "skylake_server", CPU_SKYLAKE_XEON },
+ 	{ NULL }
+ };
+ 
+@@ -437,7 +448,9 @@ static void dump_mce(struct mce *m, unsi
+ 	}
+ 	if (cputype != CPU_SANDY_BRIDGE_EP && cputype != CPU_IVY_BRIDGE_EPEX &&
+ 	    cputype != CPU_HASWELL_EPEX && cputype != CPU_BROADWELL &&
+-	    cputype != CPU_KNIGHTS_LANDING)
++	    cputype != CPU_BROADWELL_DE && cputype != CPU_BROADWELL_EPEX &&
++	    cputype != CPU_KNIGHTS_LANDING && cputype != CPU_SKYLAKE &&
++	    cputype != CPU_SKYLAKE_XEON)
+ 		resolveaddr(m->addr);
+ 	if (!ascii_mode && ismemerr && (m->status & MCI_STATUS_ADDRV)) {
+ 		diskdb_resolve_addr(m->addr);
+@@ -916,22 +929,35 @@ void usage(void)
+ {
+ 	fprintf(stderr, 
+ "Usage:\n"
++"\n"
+ "  mcelog [options]  [mcelogdevice]\n"
+ "Decode machine check error records from current kernel.\n"
++"\n"
+ "  mcelog [options] --daemon\n"
+ "Run mcelog in daemon mode, waiting for errors from the kernel.\n"
++"\n"
+ "  mcelog [options] --client\n"
+ "Query a currently running mcelog daemon for errors\n"
++"\n"
+ "  mcelog [options] --ascii < log\n"
+ "  mcelog [options] --ascii --file log\n"
+ "Decode machine check ASCII output from kernel logs\n"
++"\n"
+ "Options:\n"  
++"--version           Show the version of mcelog and exit\n"
+ "--cpu CPU           Set CPU type CPU to decode (see below for valid types)\n"
++"--intel-cpu FAMILY,MODEL  Set CPU type for an Intel CPU based on family and model from cpuid\n"
++"--k8                Set the CPU to be an AMD K8\n"
++"--p4                Set the CPU to be an Intel Pentium4\n"
++"--core2             Set the CPU to be an Intel Core2\n"
++"--generic           Set the CPU to a generic version\n"
+ "--cpumhz MHZ        Set CPU Mhz to decode time (output unreliable, not needed on new kernels)\n"
+ "--raw		     (with --ascii) Dump in raw ASCII format for machine processing\n"
+ "--daemon            Run in background waiting for events (needs newer kernel)\n"
++"--client            Query a currently running mcelog daemon for errors\n"
+ "--ignorenodev       Exit silently when the device cannot be opened\n"
+ "--file filename     With --ascii read machine check log from filename instead of stdin\n"
++"--logfile filename  Log decoded machine checks in file filename\n"
+ "--syslog            Log decoded machine checks in syslog (default stdout or syslog for daemon)\n"	     
+ "--syslog-error	     Log decoded machine checks in syslog with error level\n"
+ "--no-syslog         Never log anything to syslog\n"
+@@ -946,8 +972,10 @@ void usage(void)
+ "--num-errors N      Only process N errors (for testing)\n"
+ "--pidfile file	     Write pid of daemon into file\n"
+ "--no-imc-log	     Disable extended iMC logging\n"
++"--is-cpu-supported  Exit with return code indicating whether the CPU is supported\n"
+ 		);
+ 	diskdb_usage();
++	printf("\n");
+ 	print_cputypes();
+ 	exit(1);
+ }
+@@ -980,6 +1008,7 @@ enum options {
+ 	O_PIDFILE,
+ 	O_DEBUG_NUMERRORS,
+ 	O_NO_IMC_LOG,
++	O_IS_CPU_SUPPORTED,
+ };
+ 
+ static struct option options[] = {
+@@ -1013,6 +1042,7 @@ static struct option options[] = {
+ 	{ "pidfile", 1, NULL, O_PIDFILE },
+ 	{ "debug-numerrors", 0, NULL, O_DEBUG_NUMERRORS }, /* undocumented: for testing */
+ 	{ "no-imc-log", 0, NULL, O_NO_IMC_LOG },
++	{ "is-cpu-supported", 0, NULL, O_IS_CPU_SUPPORTED },
+ 	DISKDB_OPTIONS
+ 	{}
+ };
+@@ -1115,6 +1145,9 @@ static int modifier(int opt)
+ 	case O_NO_IMC_LOG:
+ 		imc_log = 0;
+ 		break;
++	case O_IS_CPU_SUPPORTED:
++		check_only = 1;
++		break;
+ 	case 0:
+ 		break;
+ 	default:
+@@ -1344,15 +1377,19 @@ int main(int ac, char **av)
+ 
+ 	/* before doing anything else let's see if the CPUs are supported */
+ 	if (!cpu_forced && !is_cpu_supported()) {
+-		fprintf(stderr, "CPU is unsupported\n");
++		if (!check_only)
++			fprintf(stderr, "CPU is unsupported\n");
+ 		exit(1);
+ 	}
++	if (check_only)
++		exit(0);
+ 
+ 	/* If the user didn't tell us not to use iMC logging, check if CPU supports it */
+ 	if (imc_log == -1) {
+ 		switch (cputype) {
+ 		case CPU_SANDY_BRIDGE_EP:
+ 		case CPU_IVY_BRIDGE_EPEX:
++		case CPU_HASWELL_EPEX:
+ 			imc_log = 1;
+ 			break;
+ 		default:
+diff -urNp mcelog-d2e13bf0.orig/mcelog.conf mcelog-d2e13bf0/mcelog.conf
+--- mcelog-d2e13bf0.orig/mcelog.conf	2016-05-14 08:34:40.445108236 -0400
++++ mcelog-d2e13bf0/mcelog.conf	2016-05-14 08:34:58.872975199 -0400
+@@ -23,7 +23,7 @@
+ # If this value is set incorrectly the decoded output will be likely incorrect.
+ # By default when this parameter is not set mcelog uses the CPU it is running on
+ # on very new kernels the mcelog events reported by the kernel also carry
+-# the CPU type which is used too when available and not overriden.
++# the CPU type which is used too when available and not overridden.
+ 
+ # Enable daemon mode:
+ #daemon = yes
+@@ -132,7 +132,7 @@ mem-ce-error-trigger = socket-memory-err
+ 
+ mem-ce-error-threshold = 100 / 24h
+ 
+-#  Log socket error threshold explicitely?
++#  Log socket error threshold explicitly?
+ mem-ce-error-log = yes
+ 
+ # Trigger script for uncorrected bus error events
+@@ -148,7 +148,7 @@ unknown-threshold-trigger = unknown-erro
+ # Processing of cache error thresholds reported by Intel CPUs.
+ cache-threshold-trigger = cache-error-trigger
+ 
+-# Should cache threshold events be logged explicitely?
++# Should cache threshold events be logged explicitly?
+ cache-threshold-log = yes
+ 
+ [page]
+@@ -159,7 +159,7 @@ memory-ce-threshold = 10 / 24h
+ # Trigger script for corrected errors.
+ # memory-ce-trigger = page-error-trigger
+ 
+-# Should page threshold events be logged explicitely?
++# Should page threshold events be logged explicitly?
+ memory-ce-log = yes
+ 
+ # specify the internal action in mcelog to exceeding a page error threshold
+diff -urNp mcelog-d2e13bf0.orig/mcelog.conf.5 mcelog-d2e13bf0/mcelog.conf.5
+--- mcelog-d2e13bf0.orig/mcelog.conf.5	2016-05-14 08:34:40.437107859 -0400
++++ mcelog-d2e13bf0/mcelog.conf.5	2016-05-14 08:34:58.872975199 -0400
+@@ -43,7 +43,7 @@ For valid values for type please see mce
+ If this value is set incorrectly the decoded output will be likely incorrect.
+ By default when this parameter is not set mcelog uses the CPU it is running on
+ on very new kernels the mcelog events reported by the kernel also carry
+-the CPU type which is used too when available and not overriden.
++the CPU type which is used too when available and not overridden.
+ .PP
+ .PP
+ Enable daemon mode:
+@@ -204,7 +204,7 @@ Threshold on when to trigger a correct e
+ .B mem-ce-error-threshold = 100 / 24h
+ .PP
+ .PP
+- log socket error threshold explicitely?
++ log socket error threshold explicitly?
+ .PP
+ .B mem-ce-error-log = yes
+ .PP
+@@ -230,7 +230,7 @@ Processing of cache error thresholds rep
+ .B cache-threshold-trigger = cache-error-trigger
+ .PP
+ .PP
+-Should cache threshold events be logged explicitely?
++Should cache threshold events be logged explicitly?
+ .PP
+ .B cache-threshold-log = yes
+ .PP
+@@ -246,7 +246,7 @@ Trigger script for corrected errors.
+ memory-ce-trigger = page-error-trigger
+ .PP
+ .PP
+-Should page threshold events be logged explicitely?
++Should page threshold events be logged explicitly?
+ .PP
+ .B memory-ce-log = yes
+ .PP
+diff -urNp mcelog-d2e13bf0.orig/mcelog.c.orig mcelog-d2e13bf0/mcelog.c.orig
+--- mcelog-d2e13bf0.orig/mcelog.c.orig	1969-12-31 19:00:00.000000000 -0500
++++ mcelog-d2e13bf0/mcelog.c.orig	2016-05-14 08:34:23.044289591 -0400
+@@ -0,0 +1,1409 @@
++/* Copyright (C) 2004,2005,2006 Andi Kleen, SuSE Labs.
++   Copyright (C) 2008 Intel Corporation 
++   Authors: Andi Kleen, Ying Huang
++   Decode IA32/x86-64 machine check events in /dev/mcelog. 
++
++   mcelog is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public
++   License as published by the Free Software Foundation; version
++   2.
++
++   mcelog is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   General Public License for more details.
++
++   You should find a copy of v2 of the GNU General Public License somewhere
++   on your Linux system; if not, write to the Free Software Foundation, 
++   Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA */
++
++#define _GNU_SOURCE 1
++#include <sys/fcntl.h>
++#include <sys/ioctl.h>
++#include <asm/types.h>
++#include <asm/ioctls.h>
++#include <linux/limits.h>
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
++#include <syslog.h>
++#include <ctype.h>
++#include <poll.h>
++#include <time.h>
++#include <getopt.h>
++#include <errno.h>
++#include <stddef.h>
++#include <assert.h>
++#include <signal.h>
++#include <pwd.h>
++#include <fnmatch.h>
++#include "mcelog.h"
++#include "paths.h"
++#include "k8.h"
++#include "intel.h"
++#include "p4.h"
++#include "dmi.h"
++#include "dimm.h"
++#include "tsc.h"
++#include "version.h"
++#include "config.h"
++#include "diskdb.h"
++#include "memutil.h"
++#include "eventloop.h"
++#include "memdb.h"
++#include "server.h"
++#include "trigger.h"
++#include "client.h"
++#include "msg.h"
++#include "yellow.h"
++#include "page.h"
++#include "bus.h"
++#include "unknown.h"
++
++enum cputype cputype = CPU_GENERIC;	
++
++char *logfn = LOG_DEV_FILENAME; 
++
++int ignore_nodev;
++int filter_bogus = 1;
++int cpu_forced;
++static double cpumhz;
++static int cpumhz_forced;
++int ascii_mode;
++int dump_raw_ascii;
++int daemon_mode;
++static char *inputfile;
++char *processor_flags;
++static int foreground;
++int filter_memory_errors;
++static struct config_cred runcred = { .uid = -1U, .gid = -1U };
++static int numerrors;
++static char pidfile_default[] = PID_FILE;
++static char logfile_default[] = LOG_FILE;
++static char *pidfile = pidfile_default;
++static char *logfile;
++static int debug_numerrors;
++int imc_log = -1;
++
++static int is_cpu_supported(void);
++
++
++static void disclaimer(void)
++{
++	Wprintf("Hardware event. This is not a software error.\n");
++}
++
++static char *extended_bankname(unsigned bank) 
++{
++	static char buf[64];
++	switch (bank) { 
++	case MCE_THERMAL_BANK:
++		return "THERMAL EVENT";
++	case MCE_TIMEOUT_BANK:
++		return "Timeout waiting for exception on other CPUs";
++	case K8_MCE_THRESHOLD_BASE ... K8_MCE_THRESHOLD_TOP:
++		return k8_bank_name(bank);
++
++		/* add more extended banks here */
++
++	default:
++		sprintf(buf, "Undecoded extended event %x", bank);
++		return buf;
++	} 
++}
++
++static char *bankname(unsigned bank) 
++{ 
++	static char numeric[64];
++	if (bank >= MCE_EXTENDED_BANK) 
++		return extended_bankname(bank);
++
++	switch (cputype) { 
++	case CPU_K8:
++		return k8_bank_name(bank);
++	CASE_INTEL_CPUS:
++		return intel_bank_name(bank);
++	/* add banks of other cpu types here */
++	default:
++		sprintf(numeric, "BANK %d", bank); 
++		return numeric;
++	}
++} 
++
++static void resolveaddr(unsigned long addr)
++{
++	if (addr && do_dmi && dmi_forced)
++		dmi_decodeaddr(addr);
++	/* Should check for PCI resources here too */
++}
++
++static int mce_filter(struct mce *m, unsigned recordlen)
++{
++	if (!filter_bogus) 
++		return 1;
++	/* Filter out known broken MCEs */
++	switch (cputype) {
++	case CPU_K8:
++		return mce_filter_k8(m);
++		/* add more buggy CPUs here */
++	CASE_INTEL_CPUS:
++		return mce_filter_intel(m, recordlen);
++	default:
++	case CPU_GENERIC:
++		return 1;
++	}	
++}
++
++static void print_tsc(int cpunum, __u64 tsc, unsigned long time) 
++{ 
++	int ret = -1;
++	char *buf = NULL;
++
++	if (cpumhz_forced) 
++		ret = decode_tsc_forced(&buf, cpumhz, tsc);
++	else if (!time) 
++		ret = decode_tsc_current(&buf, cpunum, cputype, cpumhz, tsc);
++	Wprintf("TSC %llx %s", tsc, ret >= 0 && buf ? buf : "");
++	free(buf);
++}
++
++struct cpuid1 {
++	unsigned stepping : 4;
++	unsigned model : 4;
++	unsigned family : 4;
++	unsigned type : 2;
++	unsigned res1 : 2;
++	unsigned ext_model : 4;
++	unsigned ext_family : 8; 
++	unsigned res2 : 4;
++};
++
++static void parse_cpuid(u32 cpuid, u32 *family, u32 *model)
++{
++	union { 
++		struct cpuid1 c;
++		u32 v;
++	} c;
++
++	/* Algorithm from IA32 SDM 2a 3-191 */
++	c.v = cpuid;
++	*family = c.c.family; 
++	if (*family == 0xf) 
++		*family += c.c.ext_family;
++	*model = c.c.model;
++	if (*family == 6 || *family == 0xf) 
++		*model += c.c.ext_model << 4;
++}
++
++static u32 unparse_cpuid(unsigned family, unsigned model)
++{
++	union { 
++		struct cpuid1 c;
++		u32 v;	
++       } c;
++
++	c.c.family = family;
++	if (family >= 0xf) {
++		c.c.family = 0xf;
++		c.c.ext_family = family - 0xf;
++	}
++	c.c.model = model & 0xf;
++	if (family == 6 || family == 0xf)
++		c.c.ext_model = model >> 4;
++	return c.v;
++}
++
++static char *cputype_name[] = {
++	[CPU_GENERIC] = "generic CPU",
++	[CPU_P6OLD] = "Intel PPro/P2/P3/old Xeon",
++	[CPU_CORE2] = "Intel Core", /* 65nm and 45nm */
++	[CPU_K8] = "AMD K8 and derivates",
++	[CPU_P4] = "Intel P4",
++	[CPU_NEHALEM] = "Intel Xeon 5500 series / Core i3/5/7 (\"Nehalem/Westmere\")",
++	[CPU_DUNNINGTON] = "Intel Xeon 7400 series",
++	[CPU_TULSA] = "Intel Xeon 7100 series",
++	[CPU_INTEL] = "Intel generic architectural MCA",
++	[CPU_XEON75XX] = "Intel Xeon 7500 series",
++	[CPU_SANDY_BRIDGE] = "Sandy Bridge", /* Fill in better name */
++	[CPU_SANDY_BRIDGE_EP] = "Sandy Bridge EP", /* Fill in better name */
++	[CPU_IVY_BRIDGE] = "Ivy Bridge", /* Fill in better name */
++	[CPU_IVY_BRIDGE_EPEX] = "Ivy Bridge EP/EX", /* Fill in better name */
++	[CPU_HASWELL] = "Haswell", /* Fill in better name */
++	[CPU_HASWELL_EPEX] = "Haswell EP/EX", /* Fill in better name */
++	[CPU_BROADWELL] = "Broadwell",
++	[CPU_KNIGHTS_LANDING] = "Knights Landing",
++	[CPU_ATOM] = "ATOM",
++};
++
++static struct config_choice cpu_choices[] = {
++	{ "generic", CPU_GENERIC },
++	{ "p6old", CPU_P6OLD },
++	{ "core2", CPU_CORE2 },
++	{ "k8", CPU_K8 },
++	{ "p4", CPU_P4 },
++	{ "dunnington", CPU_DUNNINGTON },
++	{ "xeon74xx", CPU_DUNNINGTON },
++	{ "xeon7400", CPU_DUNNINGTON },
++	{ "xeon5500", CPU_NEHALEM },
++	{ "xeon5200", CPU_CORE2 },
++	{ "xeon5000", CPU_P4 },
++	{ "xeon5100", CPU_CORE2 },
++	{ "xeon3100", CPU_CORE2 },
++	{ "xeon3200", CPU_CORE2 },
++	{ "core_i7", CPU_NEHALEM },
++	{ "core_i5", CPU_NEHALEM },
++	{ "core_i3", CPU_NEHALEM },
++	{ "nehalem", CPU_NEHALEM },
++	{ "westmere", CPU_NEHALEM },
++	{ "xeon71xx", CPU_TULSA },
++	{ "xeon7100", CPU_TULSA },
++	{ "tulsa", CPU_TULSA },
++	{ "intel", CPU_INTEL },
++	{ "xeon75xx", CPU_XEON75XX },
++	{ "xeon7500", CPU_XEON75XX },
++	{ "xeon7200", CPU_CORE2 },
++	{ "xeon7100", CPU_P4 },
++	{ "sandybridge", CPU_SANDY_BRIDGE }, /* Fill in better name */
++	{ "sandybridge-ep", CPU_SANDY_BRIDGE_EP }, /* Fill in better name */
++	{ "ivybridge", CPU_IVY_BRIDGE }, /* Fill in better name */
++	{ "ivybridge-ep", CPU_IVY_BRIDGE_EPEX }, /* Fill in better name */
++	{ "ivybridge-ex", CPU_IVY_BRIDGE_EPEX }, /* Fill in better name */
++	{ "haswell", CPU_HASWELL }, /* Fill in better name */
++	{ "haswell-ep", CPU_HASWELL_EPEX }, /* Fill in better name */
++	{ "haswell-ex", CPU_HASWELL_EPEX }, /* Fill in better name */
++	{ "broadwell", CPU_BROADWELL },
++	{ "knightslanding", CPU_KNIGHTS_LANDING },
++	{ "atom", CPU_ATOM },
++	{ NULL }
++};
++
++static void print_cputypes(void)
++{
++	struct config_choice *c;
++	fprintf(stderr, "Valid CPUs:");
++	for (c = cpu_choices; c->name; c++)
++		fprintf(stderr, " %s", c->name);
++	fputc('\n', stderr);
++}
++
++static enum cputype lookup_cputype(char *name)
++{
++	struct config_choice *c;
++	for (c = cpu_choices; c->name; c++) {
++		if (!strcasecmp(name, c->name))
++			return c->val;
++	}
++	fprintf(stderr, "Unknown CPU type `%s' specified\n", name);
++	print_cputypes();
++	exit(1);
++}
++
++static char *vendor[] = {
++	[0] = "Intel",
++	[1] = "Cyrix",
++	[2] = "AMD",
++	[3] = "UMC", 
++	[4] = "vendor 4",
++	[5] = "Centaur",
++	[6] = "vendor 6",
++	[7] = "Transmeta",
++	[8] = "NSC"
++};
++
++static unsigned cpuvendor_to_num(char *name)
++{
++	unsigned i;
++	unsigned v;
++	char *end;
++
++	v = strtoul(name, &end, 0);
++	if (end > name)
++		return v;
++	for (i = 0; i < NELE(vendor); i++)
++		if (!strcmp(name, vendor[i]))
++			return i;
++	return 0;
++}
++
++static char *cpuvendor_name(u32 cpuvendor)
++{
++	return (cpuvendor < NELE(vendor)) ? vendor[cpuvendor] : "Unknown vendor";
++}
++
++static enum cputype setup_cpuid(u32 cpuvendor, u32 cpuid)
++{
++	u32 family, model;
++
++	parse_cpuid(cpuid, &family, &model);
++
++	switch (cpuvendor) { 
++	case X86_VENDOR_INTEL:
++	        return select_intel_cputype(family, model);
++	case X86_VENDOR_AMD:
++		if (family >= 15 && family <= 17)
++			return CPU_K8;
++		/* FALL THROUGH */
++	default:
++		Eprintf("Unknown CPU type vendor %u family %x model %x", 
++			cpuvendor, family, model);
++		return CPU_GENERIC;
++	}
++}
++
++static void mce_cpuid(struct mce *m)
++{
++	static int warned;
++	if (m->cpuid) {
++		enum cputype t = setup_cpuid(m->cpuvendor, m->cpuid);
++		if (!cpu_forced)
++			cputype = t;
++		else if (t != cputype && t != CPU_GENERIC && !warned) {
++			Eprintf("Forced cputype %s does not match cpu type %s from mcelog\n",
++				cputype_name[cputype],
++				cputype_name[t]);
++			warned = 1;
++		}
++	} else if (cputype == CPU_GENERIC && !cpu_forced) { 
++		is_cpu_supported();
++	}	
++}
++
++static void mce_prepare(struct mce *m)
++{
++	mce_cpuid(m);
++	if (!m->time)
++		m->time = time(NULL);
++}
++
++static void dump_mce(struct mce *m, unsigned recordlen) 
++{
++	int n;
++	int ismemerr = 0;
++	unsigned cpu = m->extcpu ? m->extcpu : m->cpu;
++
++	/* should not happen */
++	if (!m->finished)
++		Wprintf("not finished?\n");
++	Wprintf("CPU %d %s ", cpu, bankname(m->bank));
++	if (m->tsc)
++		print_tsc(cpu, m->tsc, m->time);
++	Wprintf("\n");
++	if (m->ip)
++		Wprintf("RIP%s %02x:%llx\n", 
++		       !(m->mcgstatus & MCG_STATUS_EIPV) ? " !INEXACT!" : "",
++		       m->cs, m->ip);
++	n = 0;
++	if (m->status & MCI_STATUS_MISCV)
++		n += Wprintf("MISC %llx ", m->misc);
++	if (m->status & MCI_STATUS_ADDRV)
++		n += Wprintf("ADDR %llx ", m->addr);		
++	if (n > 0)
++		Wprintf("\n");
++	if (m->time) {
++		time_t t = m->time;
++		Wprintf("TIME %llu %s", m->time, ctime(&t));
++	} 
++	switch (cputype) { 
++	case CPU_K8:
++		decode_k8_mc(m, &ismemerr); 
++		break;
++	CASE_INTEL_CPUS:
++		decode_intel_mc(m, cputype, &ismemerr, recordlen);
++		break;
++	/* add handlers for other CPUs here */
++	default:
++		break;
++	} 
++	/* decode all status bits here */
++	Wprintf("STATUS %llx MCGSTATUS %llx\n", m->status, m->mcgstatus);
++	n = 0;
++	if (recordlen >= offsetof(struct mce, cpuid) && m->mcgcap)
++		n += Wprintf("MCGCAP %llx ", m->mcgcap);
++	if (recordlen >= offsetof(struct mce, apicid))
++		n += Wprintf("APICID %x ", m->apicid);
++	if (recordlen >= offsetof(struct mce, socketid))
++		n += Wprintf("SOCKETID %x ", m->socketid);
++	if (n > 0)
++		Wprintf("\n");
++
++	if (recordlen >= offsetof(struct mce, cpuid) && m->cpuid) {
++		u32 fam, mod;
++		parse_cpuid(m->cpuid, &fam, &mod);
++		Wprintf("CPUID Vendor %s Family %u Model %u\n",
++			cpuvendor_name(m->cpuvendor), 
++			fam,
++			mod);
++	}
++	if (cputype != CPU_SANDY_BRIDGE_EP && cputype != CPU_IVY_BRIDGE_EPEX &&
++	    cputype != CPU_HASWELL_EPEX && cputype != CPU_BROADWELL &&
++	    cputype != CPU_KNIGHTS_LANDING)
++		resolveaddr(m->addr);
++	if (!ascii_mode && ismemerr && (m->status & MCI_STATUS_ADDRV)) {
++		diskdb_resolve_addr(m->addr);
++	}
++}
++
++static void dump_mce_raw_ascii(struct mce *m, unsigned recordlen)
++{
++	/* should not happen */
++	if (!m->finished)
++		Wprintf("not finished?\n");
++	Wprintf("CPU %u\n", m->extcpu ? m->extcpu : m->cpu);
++	Wprintf("BANK %d\n", m->bank);
++	Wprintf("TSC %#llx\n", m->tsc);
++	Wprintf("RIP %#02x:%#llx\n", m->cs, m->ip);
++	Wprintf("MISC %#llx\n", m->misc);
++	Wprintf("ADDR %#llx\n", m->addr);
++	Wprintf("STATUS %#llx\n", m->status);
++	Wprintf("MCGSTATUS %#llx\n", m->mcgstatus);
++	if (recordlen >= offsetof(struct mce, cpuid))
++		Wprintf("PROCESSOR %u:%#x\n", m->cpuvendor, m->cpuid);
++#define CPRINT(str, field) 				\
++	if (recordlen >= offsetof(struct mce, field))	\
++		Wprintf(str "\n", m->field)
++	CPRINT("TIME %llu", time);
++	CPRINT("SOCKETID %u", socketid);
++	CPRINT("APICID %u", apicid);
++	CPRINT("MCGCAP %#llx", mcgcap);
++#undef CPRINT
++	Wprintf("\n");
++}
++
++int is_cpu_supported(void)
++{ 
++	enum { 
++		VENDOR = 1, 
++		FAMILY = 2, 
++		MODEL = 4, 
++		MHZ = 8, 
++		FLAGS = 16, 
++		ALL = 0x1f 
++	} seen = 0;
++	FILE *f;
++	static int checked;
++
++	if (checked)
++		return 1;
++	checked = 1;
++
++	f = fopen("/proc/cpuinfo","r");
++	if (f != NULL) { 
++		int family = 0; 
++		int model = 0;
++		char vendor[64] = { 0 };
++		char *line = NULL;
++		size_t linelen = 0; 
++		double mhz;
++
++		while (getdelim(&line, &linelen, '\n', f) > 0 && seen != ALL) { 
++			if (sscanf(line, "vendor_id : %63[^\n]", vendor) == 1) 
++				seen |= VENDOR;
++			if (sscanf(line, "cpu family : %d", &family) == 1)
++				seen |= FAMILY;
++			if (sscanf(line, "model : %d", &model) == 1)
++				seen |= MODEL;
++			/* We use only Mhz of the first CPU, assuming they are the same
++			   (there are more sanity checks later to make this not as wrong
++			   as it sounds) */
++			if (sscanf(line, "cpu MHz : %lf", &mhz) == 1) { 
++				if (!cpumhz_forced)
++					cpumhz = mhz;
++				seen |= MHZ;
++			}
++			if (!strncmp(line, "flags", 5) && isspace(line[6])) {
++				processor_flags = line;
++				line = NULL;
++				linelen = 0;
++				seen |= FLAGS;
++			}			      
++
++		} 
++		if (seen == ALL) {
++			if (!strcmp(vendor,"AuthenticAMD")) {
++				if (family == 15) {
++					cputype = CPU_K8;
++				} else if (family >= 16) {
++					SYSERRprintf("ERROR: AMD Processor family %d: mcelog does not support this processor.  Please use the edac_mce_amd module instead.\n", family);
++					return 0;
++				}
++			} else if (!strcmp(vendor,"GenuineIntel"))
++				cputype = select_intel_cputype(family, model);
++			/* Add checks for other CPUs here */	
++		} else {
++			Eprintf("warning: Cannot parse /proc/cpuinfo\n"); 
++		} 
++		fclose(f);
++		free(line);
++	} else
++		Eprintf("warning: Cannot open /proc/cpuinfo\n");
++
++	return 1;
++} 
++
++static char *skipspace(char *s)
++{
++	while (isspace(*s))
++		++s;
++	return s;
++}
++
++static char *skip_syslog(char *s)
++{
++	char *p;
++
++	/* Handle syslog output */
++	p = strstr(s, "mcelog: ");
++	if (p)
++		return p + sizeof("mcelog: ") - 1;
++	return s;
++}
++	
++static char *skipgunk(char *s)
++{
++	s = skip_syslog(s);
++
++	s = skipspace(s);
++	if (*s == '<') { 
++		s += strcspn(s, ">"); 
++		if (*s == '>') 
++			++s; 
++	}
++	s = skipspace(s);
++	if (*s == '[') {
++		s += strcspn(s, "]");
++		if (*s == ']')
++			++s;
++	}
++
++	s = skipspace(s);
++
++	if (strncmp(s, "mce: [Hardware Error]:", 22) == 0)
++		s += 22;
++
++	return skipspace(s);
++}
++
++static inline int urange(unsigned val, unsigned lo, unsigned hi)
++{
++	return val >= lo && val <= hi;
++}
++
++static int is_short(char *name)
++{
++	return strlen(name) == 3 && 
++		isupper(name[0]) && 
++		islower(name[1]) &&
++		islower(name[2]);
++}
++
++static unsigned skip_date(char *s)
++{
++	unsigned day, hour, min, year, sec; 
++	char dayname[11];
++	char month[11];
++	unsigned next;
++
++	if (sscanf(s, "%10s %10s %u %u:%u:%u %u%n", 
++		dayname, month, &day, &hour, &min, &sec, &year, &next) != 7)
++		return 0;
++	if (!is_short(dayname) || !is_short(month) || !urange(day, 1, 31) ||
++		!urange(hour, 0, 24) || !urange(min, 0, 59) || !urange(sec, 0, 59) ||
++		year < 1900)
++		return 0;
++	return next;
++}
++
++static void dump_mce_final(struct mce *m, char *symbol, int missing, int recordlen, 
++			   int dseen)
++{
++	m->finished = 1;
++	if (m->cpuid)
++		mce_cpuid(m);
++	if (!dump_raw_ascii) {
++		if (!dseen)
++			disclaimer();
++		dump_mce(m, recordlen);
++		if (symbol[0])
++			Wprintf("RIP: %s\n", symbol);
++		if (missing) 
++			Wprintf("(Fields were incomplete)\n");
++	} else
++		dump_mce_raw_ascii(m, recordlen);
++	flushlog();
++}
++
++static char *skip_patterns[] = {
++	"MCA:*",
++	"MCi_MISC register valid*",
++	"MC? status*",
++	"Unsupported new Family*",
++	"Kernel does not support page offline interface",
++	NULL
++};
++
++static int match_patterns(char *s, char **pat)
++{
++	for (; *pat; pat++) 
++		if (!fnmatch(*pat, s, 0))
++			return 0;
++	return 1;
++}
++
++#define FIELD(f) \
++	if (recordlen < endof_field(struct mce, f)) \
++		recordlen = endof_field(struct mce, f)
++
++/* Decode ASCII input for fatal messages */
++static void decodefatal(FILE *inf)
++{
++	struct mce m;
++	char *line = NULL; 
++	size_t linelen = 0;
++	int missing; 
++	char symbol[100];
++	int data;
++	int next;
++	char *s = NULL;
++	unsigned cpuvendor;
++	unsigned recordlen;
++	int disclaimer_seen;
++
++	ascii_mode = 1;
++	if (do_dmi && dmi_forced)
++		Wprintf(
++ "WARNING: with --dmi mcelog --ascii must run on the same machine with the\n"
++ "     same BIOS/memory configuration as where the machine check occurred.\n");
++
++restart:
++	missing = 0;
++	data = 0;
++	next = 0;
++	disclaimer_seen = 0;
++	recordlen = 0;
++	memset(&m, 0, sizeof(struct mce));
++	symbol[0] = '\0';
++	while (next > 0 || getdelim(&line, &linelen, '\n', inf) > 0) { 
++		int n = 0;
++		char *start;
++
++		s = next > 0 ? s + next : line;
++		s = skipgunk(s);
++		start = s;
++		next = 0;
++
++		if (!strncmp(s, "CPU ", 4)) { 
++			unsigned cpu = 0, bank = 0;
++			n = sscanf(s,
++	       "CPU %u: Machine Check Exception: %16Lx Bank %d: %016Lx%n",
++				   &cpu,
++				   &m.mcgstatus,
++				   &bank,
++				   &m.status,
++				   &next);
++			if (n == 1) {
++				n = sscanf(s, "CPU %u BANK %u%n", &cpu, &bank, 
++						&next);
++				if (n != 2)
++					n = sscanf(s, "CPU %u %u%n", &cpu,
++						 &bank, &next);
++				m.cpu = cpu;
++				if (n < 2) 
++					missing++;
++				else { 
++					m.bank = bank;
++					FIELD(bank);
++				}
++			} else if (n <= 0) { 
++				missing++;
++			} else if (n > 1) {
++				FIELD(mcgstatus);
++				m.cpu = cpu;
++				if (n > 2) {
++					m.bank = bank;
++					FIELD(bank);
++				} else if (n > 3) 
++					FIELD(status);
++				if (n < 4)
++					missing++; 
++			}
++		} 
++		else if (!strncmp(s, "STATUS", 6)) {
++			if ((n = sscanf(s,"STATUS %llx%n", &m.status, &next)) < 1)
++				missing++;
++			else
++				FIELD(status);
++		}
++		else if (!strncmp(s, "MCGSTATUS", 6)) {
++			if ((n = sscanf(s,"MCGSTATUS %llx%n", &m.mcgstatus, &next)) < 1)
++				missing++;
++			else
++				FIELD(mcgstatus);
++		}
++		else if (!strncmp(s, "RIP", 3)) { 
++			unsigned cs = 0; 
++
++			if (!strncmp(s, "RIP !INEXACT!", 13))
++				s += 13; 
++			else
++				s += 3; 
++
++			n = sscanf(s, "%02x:<%016Lx> {%99s}%n",
++				   &cs,
++				   &m.ip, 
++				   symbol, &next); 
++			m.cs = cs;
++			if (n < 2) 
++				missing++; 
++			else
++				FIELD(ip);
++		} 
++		else if (!strncmp(s, "TSC",3)) { 
++			if ((n = sscanf(s, "TSC %llx%n", &m.tsc, &next)) < 1) 
++				missing++;
++			else
++				FIELD(tsc);
++		}
++		else if (!strncmp(s, "ADDR",4)) { 
++			if ((n = sscanf(s, "ADDR %llx%n", &m.addr, &next)) < 1) 
++				missing++;
++			else
++				FIELD(addr);
++		}
++		else if (!strncmp(s, "MISC",4)) { 
++			if ((n = sscanf(s, "MISC %llx%n", &m.misc, &next)) < 1) 
++				missing++; 
++			else
++				FIELD(misc);
++		} 
++		else if (!strncmp(s, "PROCESSOR", 9)) { 
++			if ((n = sscanf(s, "PROCESSOR %u:%x%n", &cpuvendor, &m.cpuid, &next)) < 2)
++				missing++;
++			else {
++				m.cpuvendor = cpuvendor;			
++				FIELD(cpuid);
++				FIELD(cpuvendor);
++			}
++		} 
++		else if (!strncmp(s, "TIME", 4)) { 
++			if ((n = sscanf(s, "TIME %llu%n", &m.time, &next)) < 1)
++				missing++;
++			else
++				FIELD(time);
++
++			next += skip_date(s + next);
++		} 
++		else if (!strncmp(s, "MCGCAP", 6)) {
++			if ((n = sscanf(s, "MCGCAP %llx%n", &m.mcgcap, &next)) != 1)
++				missing++;
++			else
++				FIELD(mcgcap);
++		} 
++		else if (!strncmp(s, "APICID", 6)) {
++			if ((n = sscanf(s, "APICID %x%n", &m.apicid, &next)) != 1)
++				missing++;
++			else
++				FIELD(apicid);
++		} 
++		else if (!strncmp(s, "SOCKETID", 8)) {
++			if ((n = sscanf(s, "SOCKETID %u%n", &m.socketid, &next)) != 1)
++				missing++;
++			else
++				FIELD(socketid);
++		} 
++		else if (!strncmp(s, "CPUID", 5)) {
++			unsigned fam, mod;
++			char vendor[31];
++
++			if ((n = sscanf(s, "CPUID Vendor %30s Family %u Model %u\n", 
++					vendor, &fam, &mod)) < 3)
++				missing++;
++			else {
++				m.cpuvendor = cpuvendor_to_num(vendor);
++				m.cpuid = unparse_cpuid(fam, mod);
++				FIELD(cpuid);
++				FIELD(cpuvendor);
++			}
++		} 
++		else if (strstr(s, "HARDWARE ERROR"))
++			disclaimer_seen = 1;
++		else if (!strncmp(s, "(XEN)", 5)) {
++			char *w; 
++			unsigned bank, cpu;
++
++			if (strstr(s, "The hardware reports a non fatal, correctable incident occurred")) {
++				w = strstr(s, "CPU");
++				if (w && sscanf(w, "CPU %d", &cpu)) {
++					m.cpu = cpu;
++					FIELD(cpu);
++				}
++			} else if ((n = sscanf(s, "(XEN) Bank %d: %llx at %llx", 
++						&bank, &m.status, &m.addr) >= 1)) {
++				m.bank = bank;
++				FIELD(bank);	
++				if (n >= 2) 
++					FIELD(status);
++				if (n >= 3)
++					FIELD(addr);
++			}
++		}
++		else if (!match_patterns(s, skip_patterns))
++			n = 0;
++		else { 
++			s = skipspace(s);
++			if (*s && data)
++				dump_mce_final(&m, symbol, missing, recordlen, disclaimer_seen); 
++			if (!dump_raw_ascii)
++				Wprintf("%s", start);
++			if (*s && data)
++				goto restart;
++		} 
++		if (n > 0) 
++			data = 1;
++	} 
++	free(line);
++	if (data)
++		dump_mce_final(&m, symbol, missing, recordlen, disclaimer_seen);
++}
++
++static void remove_pidfile(void)
++{
++	unlink(pidfile);
++	if (pidfile != pidfile_default)
++		free(pidfile);
++}
++
++static void signal_exit(int sig)
++{
++	remove_pidfile();
++	_exit(sig);
++}
++
++static void setup_pidfile(char *s)
++{
++	char cwd[PATH_MAX];
++	char *c;
++
++	if (*s != '/') {
++		c = getcwd(cwd, PATH_MAX);
++		if (!c)
++			return;
++		asprintf(&pidfile, "%s/%s", cwd, s);
++	} else {
++		asprintf(&pidfile, "%s", s);
++	}
++
++	return;
++}
++
++static void write_pidfile(void)
++{
++	FILE *f;
++	atexit(remove_pidfile);
++	signal(SIGTERM, signal_exit);
++	signal(SIGINT, signal_exit);
++	signal(SIGQUIT, signal_exit);
++	f = fopen(pidfile, "w");
++	if (!f) {
++		Eprintf("Cannot open pidfile `%s'", pidfile);
++		return;
++	}
++	fprintf(f, "%u", getpid());
++	fclose(f);
++}
++
++void usage(void)
++{
++	fprintf(stderr, 
++"Usage:\n"
++"  mcelog [options]  [mcelogdevice]\n"
++"Decode machine check error records from current kernel.\n"
++"  mcelog [options] --daemon\n"
++"Run mcelog in daemon mode, waiting for errors from the kernel.\n"
++"  mcelog [options] --client\n"
++"Query a currently running mcelog daemon for errors\n"
++"  mcelog [options] --ascii < log\n"
++"  mcelog [options] --ascii --file log\n"
++"Decode machine check ASCII output from kernel logs\n"
++"Options:\n"  
++"--cpu CPU           Set CPU type CPU to decode (see below for valid types)\n"
++"--cpumhz MHZ        Set CPU Mhz to decode time (output unreliable, not needed on new kernels)\n"
++"--raw		     (with --ascii) Dump in raw ASCII format for machine processing\n"
++"--daemon            Run in background waiting for events (needs newer kernel)\n"
++"--ignorenodev       Exit silently when the device cannot be opened\n"
++"--file filename     With --ascii read machine check log from filename instead of stdin\n"
++"--syslog            Log decoded machine checks in syslog (default stdout or syslog for daemon)\n"	     
++"--syslog-error	     Log decoded machine checks in syslog with error level\n"
++"--no-syslog         Never log anything to syslog\n"
++"--logfile filename  Append log output to logfile instead of stdout\n"
++"--dmi               Use SMBIOS information to decode DIMMs (needs root)\n"
++"--no-dmi            Don't use SMBIOS information\n"
++"--dmi-verbose       Dump SMBIOS information (for debugging)\n"
++"--filter            Inhibit known bogus events (default on)\n"
++"--no-filter         Don't inhibit known broken events\n"
++"--config-file filename Read config information from config file instead of " CONFIG_FILENAME "\n"
++"--foreground        Keep in foreground (for debugging)\n"
++"--num-errors N      Only process N errors (for testing)\n"
++"--pidfile file	     Write pid of daemon into file\n"
++"--no-imc-log	     Disable extended iMC logging\n"
++		);
++	diskdb_usage();
++	print_cputypes();
++	exit(1);
++}
++
++enum options { 
++	O_LOGFILE = O_COMMON, 
++	O_K8,
++	O_P4,
++	O_GENERIC,
++	O_CORE2,
++	O_INTEL_CPU,
++	O_FILTER,
++	O_DMI,
++	O_NO_DMI,
++	O_DMI_VERBOSE,
++	O_SYSLOG,
++	O_NO_SYSLOG,
++	O_CPUMHZ,
++	O_SYSLOG_ERROR,
++	O_RAW,
++	O_DAEMON,
++	O_ASCII,
++	O_CLIENT,
++	O_VERSION,
++	O_CONFIG_FILE,
++	O_CPU,
++	O_FILE,
++	O_FOREGROUND,
++	O_NUMERRORS,
++	O_PIDFILE,
++	O_DEBUG_NUMERRORS,
++	O_NO_IMC_LOG,
++};
++
++static struct option options[] = {
++	{ "logfile", 1, NULL, O_LOGFILE },
++	{ "k8", 0, NULL, O_K8 },
++	{ "p4", 0, NULL, O_P4 },
++	{ "generic", 0, NULL, O_GENERIC },
++	{ "core2", 0, NULL, O_CORE2 },
++	{ "intel-cpu", 1, NULL, O_INTEL_CPU },
++	{ "ignorenodev", 0, &ignore_nodev, 1 },
++	{ "filter", 0, &filter_bogus, 1 },
++	{ "no-filter", 0, &filter_bogus, 0 },
++	{ "dmi", 0, NULL, O_DMI },
++	{ "no-dmi", 0, NULL, O_NO_DMI },
++	{ "dmi-verbose", 1, NULL, O_DMI_VERBOSE },
++	{ "syslog", 0, NULL, O_SYSLOG },
++	{ "cpumhz", 1, NULL, O_CPUMHZ },
++	{ "syslog-error", 0, NULL, O_SYSLOG_ERROR },
++	{ "dump-raw-ascii", 0, &dump_raw_ascii, 1 },
++	{ "raw", 0, &dump_raw_ascii, 1 },
++	{ "no-syslog", 0, NULL, O_NO_SYSLOG },
++	{ "daemon", 0, NULL, O_DAEMON },
++	{ "ascii", 0, NULL, O_ASCII },
++	{ "file", 1, NULL, O_FILE },
++	{ "version", 0, NULL, O_VERSION },
++	{ "config-file", 1, NULL, O_CONFIG_FILE },
++	{ "cpu", 1, NULL, O_CPU },
++	{ "foreground", 0, NULL, O_FOREGROUND },
++	{ "client", 0, NULL, O_CLIENT },
++	{ "num-errors", 1, NULL, O_NUMERRORS },
++	{ "pidfile", 1, NULL, O_PIDFILE },
++	{ "debug-numerrors", 0, NULL, O_DEBUG_NUMERRORS }, /* undocumented: for testing */
++	{ "no-imc-log", 0, NULL, O_NO_IMC_LOG },
++	DISKDB_OPTIONS
++	{}
++};
++
++static int modifier(int opt)
++{
++	int v;
++
++	switch (opt) { 
++	case O_LOGFILE:
++		logfile = optarg;
++		break;
++	case O_K8:
++		cputype = CPU_K8;
++		cpu_forced = 1;
++		break;
++	case O_P4:
++		cputype = CPU_P4;
++		cpu_forced = 1;
++		break;
++	case O_GENERIC:
++		cputype = CPU_GENERIC;
++		cpu_forced = 1;
++		break;
++	case O_CORE2:
++		cputype = CPU_CORE2;
++		cpu_forced = 1;
++		break;
++	case O_INTEL_CPU: { 
++		unsigned fam, mod;
++		if (sscanf(optarg, "%i,%i", &fam, &mod) != 2)
++			usage();
++		cputype = select_intel_cputype(fam, mod);
++		if (cputype == CPU_GENERIC) {
++			fprintf(stderr, "Unknown Intel CPU\n");
++			usage();
++		}
++		cpu_forced = 1;
++		break;
++	}
++	case O_CPU:
++		cputype = lookup_cputype(optarg);
++		cpu_forced = 1;
++		intel_cpu_init(cputype);
++		break;
++	case O_DMI:
++		do_dmi = 1;
++		dmi_forced = 1;
++		break;
++	case O_NO_DMI:
++		dmi_forced = 1;
++		do_dmi = 0;
++		break;
++	case O_DMI_VERBOSE:
++		if (sscanf(optarg, "%i", &v) != 1)
++			usage();
++		dmi_set_verbosity(v);
++		break;
++	case O_SYSLOG:
++		openlog("mcelog", 0, LOG_DAEMON);
++		syslog_opt = SYSLOG_ALL|SYSLOG_FORCE;
++		break;
++	case O_NO_SYSLOG:
++		syslog_opt = SYSLOG_FORCE;
++		break;
++	case O_CPUMHZ:
++		cpumhz_forced = 1;
++		if (sscanf(optarg, "%lf", &cpumhz) != 1)
++			usage();
++		break;
++	case O_SYSLOG_ERROR:
++		syslog_level = LOG_ERR;
++		syslog_opt = SYSLOG_ALL|SYSLOG_FORCE;
++		break;
++	case O_DAEMON:
++		daemon_mode = 1;
++		if (!(syslog_opt & SYSLOG_FORCE))
++			syslog_opt = SYSLOG_REMARK|SYSLOG_ERROR;
++		break;
++	case O_FILE:
++		inputfile = optarg;
++		break;
++	case O_FOREGROUND:
++		foreground = 1;	
++		if (!(syslog_opt & SYSLOG_FORCE))
++			syslog_opt = SYSLOG_FORCE;
++		break;
++	case O_NUMERRORS:
++		numerrors = atoi(optarg);
++		break;
++	case O_PIDFILE:
++		setup_pidfile(optarg);
++		break;
++	case O_CONFIG_FILE:
++		/* parsed in config.c */
++		break;
++	case O_DEBUG_NUMERRORS:
++		debug_numerrors = 1;
++		break;
++	case O_NO_IMC_LOG:
++		imc_log = 0;
++		break;
++	case 0:
++		break;
++	default:
++		return 0;
++	}
++	return 1;
++} 
++
++static void modifier_finish(void)
++{
++	if(!foreground && daemon_mode && !logfile && !(syslog_opt & SYSLOG_LOG)) {
++		logfile = logfile_default;
++	}
++	if (logfile) {
++		if (open_logfile(logfile) < 0) {
++			if (daemon_mode && !(syslog_opt & SYSLOG_FORCE))
++				syslog_opt = SYSLOG_ALL;
++			SYSERRprintf("Cannot open logfile %s", logfile);
++			if (!daemon_mode)
++				exit(1);
++		}
++	}			
++}
++
++void argsleft(int ac, char **av)
++{
++	int opt;
++		
++	while ((opt = getopt_long(ac, av, "", options, NULL)) != -1) { 
++		if (modifier(opt) != 1)
++			usage();
++	}
++}
++
++void no_syslog(void)
++{
++	if (!(syslog_opt & SYSLOG_FORCE))
++		syslog_opt = 0;
++}
++
++static int combined_modifier(int opt)
++{
++	int r = modifier(opt);
++	if (r == 0)
++		r = diskdb_modifier(opt);
++	return r;
++}
++
++static void general_setup(void)
++{
++	trigger_setup();
++	yellow_setup();
++	bus_setup();
++	unknown_setup();
++	config_cred("global", "run-credentials", &runcred);
++	if (config_bool("global", "filter-memory-errors") == 1)
++		filter_memory_errors = 1;
++}
++
++static void drop_cred(void)
++{
++	if (runcred.uid != -1U && runcred.gid == -1U) {
++		struct passwd *pw = getpwuid(runcred.uid);
++		if (pw)
++			runcred.gid = pw->pw_gid;
++	}
++	if (runcred.gid != -1U) {
++		if (setgid(runcred.gid) < 0) 
++			SYSERRprintf("Cannot change group to %d", runcred.gid);
++	}
++	if (runcred.uid != -1U) {
++		if (setuid(runcred.uid) < 0)
++			SYSERRprintf("Cannot change user to %d", runcred.uid);
++	}
++}
++
++static void process(int fd, unsigned recordlen, unsigned loglen, char *buf)
++{	
++	int i; 
++	int len, count;
++	int finish = 0, flags;
++
++	if (recordlen == 0) {
++		Wprintf("no data in mce record\n");
++		return;
++	}
++
++	len = read(fd, buf, recordlen * loglen); 
++	if (len < 0) {
++		SYSERRprintf("mcelog read"); 
++		return;
++	}
++
++	count = len / (int)recordlen;
++	if (count == (int)loglen) {
++		if ((ioctl(fd, MCE_GETCLEAR_FLAGS, &flags) == 0) &&
++		    (flags & (1 << MCE_OVERFLOW)))
++			Eprintf("Warning: MCE buffer is overflowed.\n");
++	}
++
++	for (i = 0; (i < count) && !finish; i++) {
++		struct mce *mce = (struct mce *)(buf + i*recordlen);
++		mce_prepare(mce);
++		if (numerrors > 0 && --numerrors == 0)
++			finish = 1;
++		if (!mce_filter(mce, recordlen)) 
++			continue;
++		if (!dump_raw_ascii) {
++			disclaimer();
++			Wprintf("MCE %d\n", i);
++			dump_mce(mce, recordlen);
++		} else
++			dump_mce_raw_ascii(mce, recordlen);
++		flushlog();
++	}
++
++	if (debug_numerrors && numerrors <= 0)
++		finish = 1;
++
++	if (recordlen > sizeof(struct mce))  {
++		Eprintf("warning: %lu bytes ignored in each record\n",
++				(unsigned long)recordlen - sizeof(struct mce)); 
++		Eprintf("consider an update\n"); 
++	}
++
++	if (finish)
++		exit(0);
++}
++
++static void noargs(int ac, char **av)
++{
++	if (getopt_long(ac, av, "", options, NULL) != -1)
++		usage();
++}
++
++static void parse_config(char **av)
++{
++	static const char config_fn[] = CONFIG_FILENAME;
++	const char *fn = config_file(av, config_fn);
++	if (!fn)
++		usage();
++	if (parse_config_file(fn) < 0) { 
++		/* If it's the default file don't complain if it isn't there */
++		if (fn != config_fn) {
++			fprintf(stderr, "Cannot open config file %s\n", fn);
++			exit(1);
++		}
++		return;
++	}
++	config_options(options, combined_modifier);
++}
++
++static void ascii_command(int ac, char **av)
++{
++	FILE *f = stdin;
++
++	argsleft(ac, av);
++	if (inputfile) { 
++		f = fopen(inputfile, "r");
++		if (!f) {		
++			fprintf(stderr, "Cannot open input file `%s': %s\n",
++				inputfile, strerror(errno));
++			exit(1);
++		}
++		/* f closed by exit */
++	}
++	no_syslog();
++	checkdmi();
++	decodefatal(f); 
++}
++
++static void client_command(int ac, char **av)
++{
++	argsleft(ac, av);
++	no_syslog();
++	// XXX modifiers
++	ask_server("dump all bios\n");		
++	ask_server("pages\n");
++}
++
++struct mcefd_data {
++	unsigned loglen;
++	unsigned recordlen;
++	char *buf;
++};
++
++static void process_mcefd(struct pollfd *pfd, void *data)
++{
++	struct mcefd_data *d = (struct mcefd_data *)data;
++	assert((pfd->revents & POLLIN) != 0);
++	process(pfd->fd, d->recordlen, d->loglen, d->buf);
++}
++
++static void handle_sigusr1(int sig)
++{
++	reopenlog();
++}
++
++int main(int ac, char **av) 
++{ 
++	struct mcefd_data d = {};
++	int opt;
++	int fd;
++
++	parse_config(av);
++
++	while ((opt = getopt_long(ac, av, "", options, NULL)) != -1) { 
++		if (opt == '?') {
++			usage(); 
++		} else if (combined_modifier(opt) > 0) {
++			continue;
++		} else if (opt == O_ASCII) { 
++			ascii_command(ac, av);
++			exit(0);
++		} else if (opt == O_CLIENT) { 
++			client_command(ac, av);
++			exit(0);
++		} else if (opt == O_VERSION) { 
++			noargs(ac, av);
++			fprintf(stderr, "mcelog %s\n", MCELOG_VERSION);
++			exit(0);
++		} else if (diskdb_cmd(opt, ac, av)) {
++			exit(0);
++		} else if (opt == 0)
++			break;		    
++	} 
++
++	/* before doing anything else let's see if the CPUs are supported */
++	if (!cpu_forced && !is_cpu_supported()) {
++		fprintf(stderr, "CPU is unsupported\n");
++		exit(1);
++	}
++
++	/* If the user didn't tell us not to use iMC logging, check if CPU supports it */
++	if (imc_log == -1) {
++		switch (cputype) {
++		case CPU_SANDY_BRIDGE_EP:
++		case CPU_IVY_BRIDGE_EPEX:
++			imc_log = 1;
++			break;
++		default:
++			imc_log = 0;
++			break;
++		}
++	}
++
++	modifier_finish();
++	if (av[optind])
++		logfn = av[optind++];
++	if (av[optind])
++		usage();
++	checkdmi();
++	general_setup();
++		
++	fd = open(logfn, O_RDONLY); 
++	if (fd < 0) {
++		if (ignore_nodev) 
++			exit(0);
++		SYSERRprintf("Cannot open `%s'", logfn);
++		exit(1);
++	}
++	
++	if (ioctl(fd, MCE_GET_RECORD_LEN, &d.recordlen) < 0)
++		err("MCE_GET_RECORD_LEN");
++	if (ioctl(fd, MCE_GET_LOG_LEN, &d.loglen) < 0)
++		err("MCE_GET_LOG_LEN");
++
++	d.buf = xalloc(d.recordlen * d.loglen); 
++	if (daemon_mode) {
++		prefill_memdb(do_dmi);
++		if (!do_dmi)
++			closedmi();
++		server_setup();
++		page_setup();
++		if (imc_log)
++			set_imc_log(cputype);
++		drop_cred();
++		register_pollcb(fd, POLLIN, process_mcefd, &d);
++		if (!foreground && daemon(0, need_stdout()) < 0)
++			err("daemon");
++		if (pidfile)
++			write_pidfile();
++		signal(SIGUSR1, handle_sigusr1);
++		event_signal(SIGUSR1);
++		eventloop();
++	} else {
++		process(fd, d.recordlen, d.loglen, d.buf);
++	}
++	trigger_wait();
++		
++	exit(0); 
++} 
+diff -urNp mcelog-d2e13bf0.orig/mcelog.h mcelog-d2e13bf0/mcelog.h
+--- mcelog-d2e13bf0.orig/mcelog.h	2016-05-14 08:34:40.446108283 -0400
++++ mcelog-d2e13bf0/mcelog.h	2016-05-14 08:34:58.872975199 -0400
+@@ -124,8 +124,12 @@ enum cputype {
+ 	CPU_HASWELL,
+ 	CPU_HASWELL_EPEX,
+ 	CPU_BROADWELL,
++	CPU_BROADWELL_DE,
++	CPU_BROADWELL_EPEX,
+ 	CPU_KNIGHTS_LANDING,
+ 	CPU_ATOM,
++	CPU_SKYLAKE,
++	CPU_SKYLAKE_XEON,
+ };
+ 
+ enum option_ranges {
+diff -urNp mcelog-d2e13bf0.orig/memdb.c mcelog-d2e13bf0/memdb.c
+--- mcelog-d2e13bf0.orig/memdb.c	2016-05-14 08:34:40.437107859 -0400
++++ mcelog-d2e13bf0/memdb.c	2016-05-14 08:34:58.872975199 -0400
+@@ -379,6 +379,14 @@ parse_dimm_addr(char *bl, unsigned *sock
+ 		   channel, dimm) == 3)
+ 		return 1;
+ 	/* Add more DMI formats here */
++	/* For new AMI BIOS Node0_Bank0 */
++	if (sscanf(bl, "Node%u_Bank%u", socketid, dimm) == 2)
++		return 1;
++
++	/* For old AMI BIOS A1_BANK0*/
++	if (sscanf(bl, "A%u_BANK%u", socketid, dimm) == 2)
++		return 1;
++
+ 	return 0;		
+ }
+ 
+diff -urNp mcelog-d2e13bf0.orig/msr.c mcelog-d2e13bf0/msr.c
+--- mcelog-d2e13bf0.orig/msr.c	2016-05-14 08:34:40.438107906 -0400
++++ mcelog-d2e13bf0/msr.c	2016-05-14 08:34:58.872975199 -0400
+@@ -20,27 +20,28 @@ static void domsr(int cpu, int msr, int
+ 			return;
+ 		default:
+ 			SYSERRprintf("Cannot open %s to set imc_log\n", fpath);
+-			exit(1);
++			return;
+ 		}
+ 	}
+ 	if (pread(fd, &data, sizeof data, msr) != sizeof data) {
+ 		SYSERRprintf("Cannot read MSR_ERROR_CONTROL from %s\n", fpath);
+-		exit(1);
++		return;
+ 	}
+ 	data |= bit;
+ 	if (pwrite(fd, &data, sizeof data, msr) != sizeof data) {
+ 		SYSERRprintf("Cannot write MSR_ERROR_CONTROL to %s\n", fpath);
+-		exit(1);
++		return;
+ 	}
+ 	if (pread(fd, &data, sizeof data, msr) != sizeof data) {
+ 		SYSERRprintf("Cannot re-read MSR_ERROR_CONTROL from %s\n", fpath);
+-		exit(1);
++		return;
+ 	}
+ 	if ((data & bit) == 0)
+ 		Lprintf("No DIMM detection available on cpu %d (normal in virtual environments)\n", cpu);
+ 	close(fd);
+ }
+ 
++/* XXX: assumes all CPUs are already onlined. */
+ void set_imc_log(int cputype)
+ {
+ 	int cpu, ncpus = sysconf(_SC_NPROCESSORS_CONF);
+@@ -49,6 +50,7 @@ void set_imc_log(int cputype)
+ 	switch (cputype) {
+ 	case CPU_SANDY_BRIDGE_EP:
+ 	case CPU_IVY_BRIDGE_EPEX:
++	case CPU_HASWELL_EPEX:
+ 		msr = 0x17f;	/* MSR_ERROR_CONTROL */
+ 		bit = 0x2;	/* MemError Log Enable */
+ 		break;
+diff -urNp mcelog-d2e13bf0.orig/nehalem.c mcelog-d2e13bf0/nehalem.c
+--- mcelog-d2e13bf0.orig/nehalem.c	2016-05-14 08:34:40.438107906 -0400
++++ mcelog-d2e13bf0/nehalem.c	2016-05-14 08:34:58.872975199 -0400
+@@ -124,13 +124,17 @@ static char *mmm_desc[] = {
+ 	"Reserved 7"
+ };
+ 
+-void decode_memory_controller(u32 status)
++void decode_memory_controller(u32 status, u8 bank)
+ {
+ 	char channel[30];
+ 	if ((status & 0xf) == 0xf) 
+ 		strcpy(channel, "unspecified"); 
+-	else
+-		sprintf(channel, "%u", status & 0xf);
++	else {
++		if (cputype == CPU_KNIGHTS_LANDING) /* Fix for Knights Landing MIC */
++			sprintf(channel, "%u", (status & 0xf) + 3 * (bank == 15));
++		else
++			sprintf(channel, "%u", status & 0xf);
++	}
+ 	Wprintf("MEMORY CONTROLLER %s_CHANNEL%s_ERR\n", 
+ 		mmm_mnemonic[(status >> 4) & 7],
+ 		channel);
+diff -urNp mcelog-d2e13bf0.orig/nehalem.h mcelog-d2e13bf0/nehalem.h
+--- mcelog-d2e13bf0.orig/nehalem.h	2016-05-14 08:34:40.438107906 -0400
++++ mcelog-d2e13bf0/nehalem.h	2016-05-14 08:34:58.872975199 -0400
+@@ -1,4 +1,4 @@
+ void nehalem_decode_model(u64 status, u64 misc);
+ void xeon75xx_decode_model(struct mce *m, unsigned msize);
+-void decode_memory_controller(u32 status);
++void decode_memory_controller(u32 status, u8 bank);
+ void nehalem_memerr_misc(struct mce *m, int *channel, int *dimm);
+diff -urNp mcelog-d2e13bf0.orig/p4.c mcelog-d2e13bf0/p4.c
+--- mcelog-d2e13bf0.orig/p4.c	2016-05-14 08:34:40.444108189 -0400
++++ mcelog-d2e13bf0/p4.c	2016-05-14 08:34:58.872975199 -0400
+@@ -36,6 +36,9 @@
+ #include "sandy-bridge.h"
+ #include "ivy-bridge.h"
+ #include "haswell.h"
++#include "broadwell_de.h"
++#include "broadwell_epex.h"
++#include "skylake_xeon.h"
+ 
+ /* decode mce for P4/Xeon and Core2 family */
+ 
+@@ -52,7 +55,7 @@ static char* get_TT_str(__u8 t)
+ static char* get_LL_str(__u8 ll)
+ {
+ 	static char* LL[] = {"Level-0", "Level-1", "Level-2", "Level-3"};
+-	if (ll > NELE(LL)) {
++	if (ll >= NELE(LL)) {
+ 		return "UNKNOWN";
+ 	}
+ 
+@@ -118,7 +121,8 @@ static char* get_II_str(__u8 i)
+ 	return II[i];
+ }
+ 
+-static int decode_mca(u64 status, u64 misc, u64 track, int cpu, int *ismemerr, int socket)
++static int decode_mca(u64 status, u64 misc, u64 track, int cpu, int *ismemerr, int socket,
++			u8 bank)
+ {
+ #define TLB_LL_MASK      0x3  /*bit 0, bit 1*/
+ #define TLB_LL_SHIFT     0x0
+@@ -231,7 +235,7 @@ static int decode_mca(u64 status, u64 mi
+ 			run_iomca_trigger(socket, cpu, seg, bus, dev, fn);
+ 		}
+ 	} else if (test_prefix(7, mca)) {
+-		decode_memory_controller(mca);
++		decode_memory_controller(mca, bank);
+ 		*ismemerr = 1;
+ 	} else {
+ 		Wprintf("Unknown Error %x\n", mca);
+@@ -286,7 +290,7 @@ static const char *arstate[4] = {
+ };
+ 
+ static int decode_mci(__u64 status, __u64 misc, int cpu, unsigned mcgcap, int *ismemerr,
+-		       int socket)
++		       int socket, __u8 bank)
+ {
+ 	u64 track = 0;
+ 
+@@ -326,7 +330,7 @@ static int decode_mci(__u64 status, __u6
+ 		decode_tracking(track);
+ 	}
+ 	Wprintf("MCA: ");
+-	return decode_mca(status, misc, track, cpu, ismemerr, socket);
++	return decode_mca(status, misc, track, cpu, ismemerr, socket, bank);
+ }
+ 
+ static void decode_mcg(__u64 mcgstatus)
+@@ -368,7 +372,7 @@ void decode_intel_mc(struct mce *log, in
+ 
+ 	decode_mcg(log->mcgstatus);
+ 	if (decode_mci(log->status, log->misc, cpu, log->mcgcap, ismemerr,
+-		socket))
++		socket, log->bank))
+ 		run_unknown_trigger(socket, cpu, log);
+ 
+ 	if (test_prefix(11, (log->status & 0xffffL))) {
+@@ -415,6 +419,15 @@ void decode_intel_mc(struct mce *log, in
+ 	case CPU_HASWELL_EPEX:
+ 		hsw_decode_model(cputype, log->bank, log->status, log->misc);
+ 		break;
++	case CPU_BROADWELL_DE:
++		bdw_de_decode_model(cputype, log->bank, log->status, log->misc);
++		break;
++	case CPU_BROADWELL_EPEX:
++		bdw_epex_decode_model(cputype, log->bank, log->status, log->misc);
++		break;
++	case CPU_SKYLAKE_XEON:
++		skylake_s_decode_model(cputype, log->bank, log->status, log->misc);
++		break;
+ 	}
+ }
+ 
+diff -urNp mcelog-d2e13bf0.orig/skylake_xeon.c mcelog-d2e13bf0/skylake_xeon.c
+--- mcelog-d2e13bf0.orig/skylake_xeon.c	1969-12-31 19:00:00.000000000 -0500
++++ mcelog-d2e13bf0/skylake_xeon.c	2016-05-14 08:35:00.556054382 -0400
+@@ -0,0 +1,210 @@
++/* Copyright (C) 2016 Intel Corporation
++   Decode Intel Skylake specific machine check errors.
++
++   mcelog is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public
++   License as published by the Free Software Foundation; version
++   2.
++
++   mcelog is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   General Public License for more details.
++
++   You should find a copy of v2 of the GNU General Public License somewhere
++   on your Linux system; if not, write to the Free Software Foundation,
++   Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++
++   Author: Tony Luck
++*/
++
++#include "mcelog.h"
++#include "bitfield.h"
++#include "skylake_xeon.h"
++#include "memdb.h"
++
++/* See IA32 SDM Vol3B Table 16-27 */
++
++static char *pcu_1[] = {
++	[0x00] = "No Error",
++	[0x0d] = "MCA_DMI_TRAINING_TIMEOUT",
++	[0x0f] = "MCA_DMI_CPU_RESET_ACK_TIMEOUT",
++	[0x10] = "MCA_MORE_THAN_ONE_LT_AGENT",
++	[0x1e] = "MCA_BIOS_RST_CPL_INVALID_SEQ",
++	[0x1f] = "MCA_BIOS_INVALID_PKG_STATE_CONFIG",
++	[0x25] = "MCA_MESSAGE_CHANNEL_TIMEOUT",
++	[0x27] = "MCA_MSGCH_PMREQ_CMP_TIMEOUT",
++	[0x30] = "MCA_PKGC_DIRECT_WAKE_RING_TIMEOUT",
++	[0x31] = "MCA_PKGC_INVALID_RSP_PCH",
++	[0x33] = "MCA_PKGC_WATCHDOG_HANG_CBZ_DOWN",
++	[0x34] = "MCA_PKGC_WATCHDOG_HANG_CBZ_UP",
++	[0x38] = "MCA_PKGC_WATCHDOG_HANG_C3_UP_SF",
++	[0x40] = "MCA_SVID_VCCIN_VR_ICC_MAX_FAILURE",
++	[0x41] = "MCA_SVID_COMMAND_TIMEOUT",
++	[0x42] = "MCA_SVID_VCCIN_VR_VOUT_FAILURE",
++	[0x43] = "MCA_SVID_CPU_VR_CAPABILITY_ERROR",
++	[0x44] = "MCA_SVID_CRITICAL_VR_FAILED",
++	[0x45] = "MCA_SVID_SA_ITD_ERROR",
++	[0x46] = "MCA_SVID_READ_REG_FAILED",
++	[0x47] = "MCA_SVID_WRITE_REG_FAILED",
++	[0x48] = "MCA_SVID_PKGC_INIT_FAILED",
++	[0x49] = "MCA_SVID_PKGC_CONFIG_FAILED",
++	[0x4a] = "MCA_SVID_PKGC_REQUEST_FAILED",
++	[0x4b] = "MCA_SVID_IMON_REQUEST_FAILED",
++	[0x4c] = "MCA_SVID_ALERT_REQUEST_FAILED",
++	[0x4d] = "MCA_SVID_MCP_VR_ABSENT_OR_RAMP_ERROR",
++	[0x4e] = "MCA_SVID_UNEXPECTED_MCP_VR_DETECTED",
++	[0x51] = "MCA_FIVR_CATAS_OVERVOL_FAULT",
++	[0x52] = "MCA_FIVR_CATAS_OVERCUR_FAULT",
++	[0x58] = "MCA_WATCHDOG_TIMEOUT_PKGC_SLAVE",
++	[0x59] = "MCA_WATCHDOG_TIMEOUT_PKGC_MASTER",
++	[0x5a] = "MCA_WATCHDOG_TIMEOUT_PKGS_MASTER",
++	[0x61] = "MCA_PKGS_CPD_UNCPD_TIMEOUT",
++	[0x63] = "MCA_PKGS_INVALID_REQ_PCH",
++	[0x64] = "MCA_PKGS_INVALID_REQ_INTERNAL",
++	[0x65] = "MCA_PKGS_INVALID_RSP_INTERNAL",
++	[0x6b] = "MCA_PKGS_SMBUS_VPP_PAUSE_TIMEOUT",
++	[0x81] = "MCA_RECOVERABLE_DIE_THERMAL_TOO_HOT",
++};
++
++static struct field pcu_mc4[] = {
++	FIELD(24, pcu_1),
++	{}
++};
++
++/* See IA32 SDM Vol3B Table 16-28 */
++
++static char *qpi[] = {
++	[0x00] = "UC Phy Initialization Failure",
++	[0x01] = "UC Phy detected drift buffer alarm",
++	[0x02] = "UC Phy detected latency buffer rollover",
++	[0x10] = "UC LL Rx detected CRC error: unsuccessful LLR: entered abort state",
++	[0x11] = "UC LL Rx unsupported or undefined packet",
++	[0x12] = "UC LL or Phy control error",
++	[0x13] = "UC LL Rx parameter exchange exception",
++	[0x1F] = "UC LL detected control error from the link-mesh interface",
++	[0x20] = "COR Phy initialization abort",
++	[0x21] = "COR Phy reset",
++	[0x22] = "COR Phy lane failure, recovery in x8 width",
++	[0x23] = "COR Phy L0c error corrected without Phy reset",
++	[0x24] = "COR Phy L0c error triggering Phy Reset",
++	[0x25] = "COR Phy L0p exit error corrected with Phy reset",
++	[0x30] = "COR LL Rx detected CRC error - successful LLR without Phy Reinit",
++	[0x31] = "COR LL Rx detected CRC error - successful LLR with Phy Reinit",
++};
++
++static struct field qpi_mc[] = {
++	FIELD(16, qpi),
++	{}
++};
++
++/* These apply to MSCOD 0x12 "UC LL or Phy control error" */
++static struct field qpi_0x12[] = {
++	SBITFIELD(22, "Phy Control Error"),
++	SBITFIELD(23, "Unexpected Retry.Ack flit"),
++	SBITFIELD(24, "Unexpected Retry.Req flit"),
++	SBITFIELD(25, "RF parity error"),
++	SBITFIELD(26, "Routeback Table error"),
++	SBITFIELD(27, "unexpected Tx Protocol flit (EOP, Header or Data)"),
++	SBITFIELD(28, "Rx Header-or-Credit BGF credit overflow/underflow"),
++	SBITFIELD(29, "Link Layer Reset still in progress when Phy enters L0"),
++	SBITFIELD(30, "Link Layer reset initiated while protocol traffic not idle"),
++	SBITFIELD(31, "Link Layer Tx Parity Error"),
++	{}
++};
++
++/* See IA32 SDM Vol3B Table 16-29 */
++
++static struct field mc_bits[] = {
++	SBITFIELD(16, "Address parity error"),
++	SBITFIELD(17, "HA write data parity error"),
++	SBITFIELD(18, "HA write byte enable parity error"),
++	SBITFIELD(19, "Corrected patrol scrub error"),
++	SBITFIELD(20, "Uncorrected patrol scrub error"),
++	SBITFIELD(21, "Corrected spare error"),
++	SBITFIELD(22, "Uncorrected spare error"),
++	SBITFIELD(23, "Any HA read error"),
++	SBITFIELD(24, "WDB read parity error"),
++	SBITFIELD(25, "DDR4 command address parity error"),
++	SBITFIELD(26, "Uncorrected address parity error"),
++	{}
++};
++
++static char *mc_0x8xx[] = {
++	[0x0] = "Unrecognized request type",
++	[0x1] = "Read response to an invalid scoreboard entry",
++	[0x2] = "Unexpected read response",
++	[0x3] = "DDR4 completion to an invalid scoreboard entry",
++	[0x4] = "Completion to an invalid scoreboard entry",
++	[0x5] = "Completion FIFO overflow",
++	[0x6] = "Correctable parity error",
++	[0x7] = "Uncorrectable error",
++	[0x8] = "Interrupt received while outstanding interrupt was not ACKed",
++	[0x9] = "ERID FIFO overflow",
++	[0xa] = "Error on Write credits",
++	[0xb] = "Error on Read credits",
++	[0xc] = "Scheduler error",
++	[0xd] = "Error event",
++};
++
++static struct field memctrl_mc13[] = {
++	FIELD(16, mc_0x8xx),
++	{}
++};
++
++/* See IA32 SDM Vol3B Table 16-30 */
++
++static struct field m2m[] = {
++	SBITFIELD(16, "MscodDataRdErr"),
++	SBITFIELD(17, "Reserved"),
++	SBITFIELD(18, "MscodPtlWrErr"),
++	SBITFIELD(19, "MscodFullWrErr"),
++	SBITFIELD(20, "MscodBgfErr"),
++	SBITFIELD(21, "MscodTimeout"),
++	SBITFIELD(22, "MscodParErr"),
++	SBITFIELD(23, "MscodBucket1Err"),
++	{}
++};
++
++void skylake_s_decode_model(int cputype, int bank, u64 status, u64 misc)
++{
++	switch (bank) {
++	case 4:
++		Wprintf("PCU: ");
++		switch (EXTRACT(status, 0, 15) & ~(1ull << 12)) {
++		case 0x402: case 0x403:
++			Wprintf("Internal errors ");
++			break;
++		case 0x406:
++			Wprintf("Intel TXT errors ");
++			break;
++		case 0x407:
++			Wprintf("Other UBOX Internal errors ");
++			break;
++		}
++		if (EXTRACT(status, 16, 19))
++			Wprintf("PCU internal error ");
++		decode_bitfield(status, pcu_mc4);
++		break;
++	case 5:
++	case 12:
++	case 19:
++		Wprintf("QPI: ");
++		decode_bitfield(status, qpi_mc);
++		if (EXTRACT(status, 16, 21) == 0x12)
++			decode_bitfield(status, qpi_0x12);
++		break;
++	case 7: case 8:
++		Wprintf("M2M: ");
++		decode_bitfield(status, m2m);
++		break;
++	case 13: case 14: case 15:
++	case 16: case 17: case 18:
++		Wprintf("MemCtrl: ");
++		if (EXTRACT(status, 27, 27))
++			decode_bitfield(status, memctrl_mc13);
++		else
++			decode_bitfield(status, mc_bits);
++		break;
++	}
++}
+diff -urNp mcelog-d2e13bf0.orig/skylake_xeon.h mcelog-d2e13bf0/skylake_xeon.h
+--- mcelog-d2e13bf0.orig/skylake_xeon.h	1969-12-31 19:00:00.000000000 -0500
++++ mcelog-d2e13bf0/skylake_xeon.h	2016-05-14 08:35:00.557054429 -0400
+@@ -0,0 +1 @@
++void skylake_s_decode_model(int cputype, int bank, u64 status, u64 misc);
+diff -urNp mcelog-d2e13bf0.orig/trigger.c mcelog-d2e13bf0/trigger.c
+--- mcelog-d2e13bf0.orig/trigger.c	2016-05-14 08:34:40.439107953 -0400
++++ mcelog-d2e13bf0/trigger.c	2016-05-14 08:35:00.557054429 -0400
+@@ -151,14 +151,11 @@ void trigger_setup(void)
+ 
+ void trigger_wait(void)
+ {
+-	int sig;
+-	sigset_t mask;
+-	sigemptyset(&mask);
+-	sigaddset(&mask, SIGCHLD);
+-	while (num_children > 0) {
+-		if (sigwait(&mask, &sig) < 0)
+-			SYSERRprintf("sigwait waiting for children");
+-	}
++	int status;
++	int pid;
++	
++	while ((pid = waitpid((pid_t)-1, &status, 0)) > 0) 
++		finish_child(pid, status);
+ }
+ 
+ int trigger_check(char *s)
+diff -urNp mcelog-d2e13bf0.orig/tsc.c mcelog-d2e13bf0/tsc.c
+--- mcelog-d2e13bf0.orig/tsc.c	2016-05-14 08:34:40.443108142 -0400
++++ mcelog-d2e13bf0/tsc.c	2016-05-14 08:35:00.557054429 -0400
+@@ -161,7 +161,7 @@ int main(void)
+ {
+ 	char *buf;
+ 	u64 tsc = rdtscll();
+-	printf("%Lx tsc\n", tsc);
++	printf("%llx tsc\n", tsc);
+ 	if (decode_tsc_current(&buf, 0, CPU_CORE2, 0.0, tsc) >= 0)
+ 		printf("%s\n", buf);
+ 	else
+diff -urNp mcelog-d2e13bf0.orig/unknown.c mcelog-d2e13bf0/unknown.c
+--- mcelog-d2e13bf0.orig/unknown.c	2016-05-14 08:34:40.446108283 -0400
++++ mcelog-d2e13bf0/unknown.c	2016-05-14 08:35:00.557054429 -0400
+@@ -50,6 +50,9 @@ void run_unknown_trigger(int socket, int
+ 	char *msg;
+ 	char *location;
+ 
++	if (!unknown_trigger)
++		return;
++
+ 	if (socket >= 0)
+ 		asprintf(&location, "CPU %d on socket %d", cpu, socket);
+ 	else
+@@ -58,9 +61,6 @@ void run_unknown_trigger(int socket, int
+ 	asprintf(&env[ei++], "LOCATION=%s", location);
+ 	free(location);
+ 
+-	if (!unknown_trigger)
+-		goto out;
+-
+ 	if (socket >= 0)
+ 		asprintf(&env[ei++], "SOCKETID=%d", socket);
+ 	asprintf(&env[ei++], "MESSAGE=%s", msg);
+@@ -76,7 +76,6 @@ void run_unknown_trigger(int socket, int
+ 	run_trigger(unknown_trigger, NULL, env);
+ 	for (i = 0; i < ei; i++)
+ 		free(env[i]);
+-out:
+ 	free(msg);
+ }
+ 
+diff -urNp mcelog-d2e13bf0.orig/version.h mcelog-d2e13bf0/version.h
+--- mcelog-d2e13bf0.orig/version.h	2016-05-14 08:34:40.444108189 -0400
++++ mcelog-d2e13bf0/version.h	2016-05-14 08:35:00.557054429 -0400
+@@ -1,2 +1,3 @@
+-#define MCELOG_VERSION "1.0pre"
++extern char version[];
++#define MCELOG_VERSION version
+ 
