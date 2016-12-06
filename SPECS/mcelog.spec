@@ -4,7 +4,7 @@
 Summary:	Tool to translate x86-64 CPU Machine Check Exception data
 Name:		mcelog
 Version:	136
-Release:	1.%{last_git_commit}%{?dist}
+Release:	2.%{last_git_commit}%{?dist}
 Epoch:		3
 Group:		System Environment/Base
 License:	GPLv2
@@ -107,6 +107,8 @@ fi
 %attr(0644,root,root) %{_mandir}/*/*
 
 %changelog
+* Mon Oct 31 2016 Prarit Bhargava <prarit@redhat.com> - 3:136.2.e4aca63
+- fix post-uninstall script warning during upgrade [1388427]
 * Fri May 13 2016 Prarit Bhargava <prarit@redhat.com> - 3:136-1.e4aca63
 - update NVR to 136 to match upstream [1336431]
 - additional general fixes [1336431]

@@ -12,6 +12,7 @@ After=syslog.target
 Type=forking
 ExecStartPre=/etc/mcelog/mcelog.setup
 ExecStart=/usr/sbin/mcelog --ignorenodev --daemon --syslog
+SuccessExitStatus=0 15
 StandardOutput=syslog
 
 [Install]
