@@ -58,7 +58,7 @@ chkconfig --add mcelogd
 
 %files
 %defattr(-,root,root,-)
-%doc README CHANGES
+%doc README.md CHANGES
 %{_sbindir}/mcelog
 %{_sysconfdir}/cron.hourly/mcelog.cron
 %attr(0644,root,root) %{_mandir}/*/*
