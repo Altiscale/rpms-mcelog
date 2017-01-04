@@ -68,7 +68,7 @@ chkconfig --add mcelogd
 %{_sysconfdir}/logrotate.d/mcelog
 
 %changelog
-* Tue Jan 01 2016 Tucker <junk@altiscale.com> 2:146.1
+* Tue Jan 01 2017 Tucker <junk@altiscale.com> 2:146.1
 - updated to upstream 146
 - updated patch file and renamed to alti6
 
