@@ -8,7 +8,7 @@ Release:	1.%{last_git_commit}%{?dist}
 Epoch:		2
 Group:		System Environment/Base
 License:	GPLv2
-Source0:	mcelog-%{last_git_version}-%{last_git_commit}.tar.gz
+Source0:	https://github.com/andikleen/mcelog/archive/v%{last_git_version}.tar.gz
 # single unified patch relative to upstream
 Patch0:		mcelog-alti6.patch
 URL:		https://github.com/andikleen/mcelog.git
@@ -20,7 +20,7 @@ mcelog is a daemon that collects and decodes Machine Check Exception data
 on x86-64 machines.
 
 %prep
-%setup -q -n %{name}-%{last_git_version}-%{last_git_commit}
+%setup -q -n %{name}-%{last_git_version}
 %patch0 -p1
 
 # This can be removed at the next update.
